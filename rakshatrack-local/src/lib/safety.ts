@@ -9,7 +9,38 @@ export type State={settings:Settings;contacts:Contact[];destinations:Destination
 export const initialState:State={settings:{name:'Aryan',locationConsent:false,sharingConsent:false,externalMaps:false,autoDetect:false,checkTimeout:60,contactTimeout:120,deviation:300,stopMinutes:5,retention:30,notifications:false},contacts:[],destinations:[],trips:[],incidents:[]};
 export const demoRoute:Point[]=[[28.6301,77.2198],[28.6312,77.2188],[28.6324,77.2181],[28.6337,77.2174],[28.6350,77.2173],[28.6365,77.2175],[28.6381,77.2176],[28.6396,77.2175],[28.6412,77.2168],[28.6424,77.2155],[28.6439,77.2148],[28.6452,77.2145],[28.6465,77.2141],[28.6478,77.2137],[28.6490,77.2132]].map(([lat,lng])=>({lat,lng,time:0,accuracy:12,speed:8}));
 export function distance(a:Pick<Point,'lat'|'lng'>,b:Pick<Point,'lat'|'lng'>){const rad=Math.PI/180;const dLat=(b.lat-a.lat)*rad,dLng=(b.lng-a.lng)*rad;const x=Math.sin(dLat/2)**2+Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dLng/2)**2;return 6371000*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
-export function pathDistance(p:Point[]){return p.slice(1).reduce((sum,n,i)=>sum+distance(p[i],n),0);}
+// Distance shown in ride reports is an estimate, not a GPS odometer.
+// Discard low-quality fixes and implausible jumps, and accumulate displacement
+// only after it clears the combined positional uncertainty of two readings.
+// The original accepted GPS points remain untouched for the journey trail.
+export function pathDistance(points:Point[]){
+  let anchor:Point|null=null,total=0;
+  for(const p of points){
+    if(!Number.isFinite(p.lat)||!Number.isFinite(p.lng)||Math.abs(p.lat)>90||Math.abs(p.lng)>180||
+      !Number.isFinite(p.time)||!Number.isFinite(p.accuracy)||p.accuracy<0||p.accuracy>75)continue;
+    if(!anchor){anchor=p;continue;}
+    if(p.time<=anchor.time)continue;
+    const travelled=distance(anchor,p),elapsed=(p.time-anchor.time)/1000;
+    // Do not bridge long recording gaps with a fictitious straight-line trip.
+    if(elapsed>120){anchor=p;continue;}
+    // A GPS teleport is not proof the passenger travelled that distance.
+    if(travelled/elapsed>65)continue;
+    const noiseFloor=Math.max(4,Math.min(22,Math.hypot(anchor.accuracy,p.accuracy)*0.65));
+    if(travelled<=noiseFloor)continue;
+    total+=travelled;
+    anchor=p;
+  }
+  return total;
+}
+// Preserve the last real, recent fix when a ride ends between track samples.
+// Never attach the passenger's real location to a simulated demo journey.
+export function finalJourneyFix(trip:Trip,fix:Point|null,now=Date.now()):Point|null{
+  if(trip.demo||!fix||!Number.isFinite(fix.time)||fix.time<trip.start||fix.time>now||now-fix.time>30000||
+    !Number.isFinite(fix.lat)||!Number.isFinite(fix.lng)||Math.abs(fix.lat)>90||Math.abs(fix.lng)>180||
+    !Number.isFinite(fix.accuracy)||fix.accuracy<0||fix.accuracy>75)return null;
+  const previous=trip.points.at(-1);
+  return previous&&fix.time<=previous.time?null:fix;
+}
 export function routeDistance(p:Point,route:Point[]){if(!route.length)return Infinity;if(route.length===1)return distance(p,route[0]);const scale=111320;const cos=Math.cos(p.lat*Math.PI/180);let best=Infinity;for(let i=1;i<route.length;i++){const a={x:(route[i-1].lng-p.lng)*scale*cos,y:(route[i-1].lat-p.lat)*scale},b={x:(route[i].lng-p.lng)*scale*cos,y:(route[i].lat-p.lat)*scale};const dx=b.x-a.x,dy=b.y-a.y;const t=Math.max(0,Math.min(1,-(a.x*dx+a.y*dy)/(dx*dx+dy*dy||1)));best=Math.min(best,Math.hypot(a.x+t*dx,a.y+t*dy));}return best;}
 export function detectConcern(trip:Trip,settings:Settings,now=Date.now()):string|null{const points=trip.points.filter(p=>p.accuracy<=75&&now-p.time<Math.max(180000,settings.stopMinutes*60000+15000));if(points.length<3)return null;const last=points.at(-1)!;if(now-last.time>30000)return null;const recent=points.filter(p=>now-p.time<=90000);if(trip.destination&&trip.route.length&&recent.length>=3&&now-recent[0].time>=45000&&recent.every(p=>routeDistance(p,trip.route)>settings.deviation+p.accuracy))return 'Persistent route deviation';const stop=points.filter(p=>now-p.time<=settings.stopMinutes*60000);if(stop.length>=3&&now-stop[0].time>=settings.stopMinutes*60000-15000&&stop.every(p=>distance(p,last)<40)&&(!trip.destination||distance(last,trip.destination)>150))return 'Unusual stop';return null;}
 export function nextContact(i:Incident,now:number,timeout:number){return i.status==='checking'&&i.stage===1&&i.acknowledged===null&&now-i.contactAt>=timeout*1000?2:i.stage;}
