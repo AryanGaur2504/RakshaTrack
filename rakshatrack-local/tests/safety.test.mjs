@@ -56,7 +56,7 @@ test('safety monitor ignores stale fixes, GPS gaps and impossible jumps',()=>{
  assert.equal(assessJourneySafety(trip(off),initialState.settings,now).concern,'Persistent route deviation');
  const gap=[off[0],off[1],off[7]];
  assert.equal(assessJourneySafety(trip(gap),initialState.settings,now).concern,null);
- assert.equal(assessJourneySafety(trip(off.map(p=>({...p,time:p.time-50000})),initialState.settings,now).tracking,'stale');
+ assert.equal(assessJourneySafety(trip(off.map(p=>({...p,time:p.time-50000}))),initialState.settings,now).tracking,'stale');
  const jumps=[point(28.61,77.2,now-20000),point(28.612,77.2,now-10000),point(28.7,77.3,now)];
  assert.equal(assessJourneySafety(trip(jumps),initialState.settings,now).tracking,'unreliable');
 });
