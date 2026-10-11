@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {distance,routeDistance,detectConcern,initialState,makeIncident,nextContact,locationLabel,mergeState} from '../src/lib/safety.ts';
+import {distance,pathDistance,finalJourneyFix,routeDistance,detectConcern,initialState,makeIncident,nextContact,locationLabel,mergeState} from '../src/lib/safety.ts';
 const now=1000000;
 const point=(lat,lng,time=now,accuracy=10)=>({lat,lng,time,accuracy,speed:8});
 const route=[point(28.6,77.2),point(28.62,77.2)];
@@ -17,3 +17,36 @@ test('explicit SOS bypasses contact verification and keeps delivery pending',()=
 test('a concern does not become an emergency automatically',()=>{const i=makeIncident(null,'concern','Deviation',now);assert.equal(i.status,'checking');assert.equal(i.stage,0);const first={...i,stage:1};assert.equal(nextContact(first,now+119000,120),1);assert.equal(nextContact(first,now+120000,120),2);assert.equal(first.status,'checking');assert.equal(nextContact({...first,acknowledged:now+1000},now+120000,120),1);});
 test('stale locations are never labelled live',()=>{assert.equal(locationLabel(null,now),'Location unavailable');assert.equal(locationLabel(point(0,0,now-1000),now),'Live location');assert.equal(locationLabel(point(0,0,now-180000),now),'Last known location');});
 test('conflict merge deduplicates incident and journey identities',()=>{const a=trip([point(28.6,77.2)]);const b={...a,updated:now+1,name:'Newer'};const i=makeIncident(a,'concern','Check',now);const result=mergeState({...initialState,trips:[a],incidents:[i]},{...initialState,trips:[b],incidents:[{...i,updated:now+1,status:'resolved'}]});assert.equal(result.trips.length,1);assert.equal(result.trips[0].name,'Newer');assert.equal(result.incidents.length,1);assert.equal(result.incidents[0].status,'resolved');});
+
+test('journey distance ignores stationary position noise and low-confidence fixes',()=>{
+  const jitter=Array.from({length:35},(_,i)=>point(28.6+(i%3-1)*0.00004,77.2+((i*7)%3-1)*0.00004,now+i*5000,25));
+  assert.equal(pathDistance(jitter),0);
+  assert.equal(pathDistance([...jitter,point(28.7,77.3,now+180000,250)]),0);
+});
+test('journey distance accumulates plausible walking and driving without changing raw trail',()=>{
+  const walk=Array.from({length:21},(_,i)=>point(28.6+i*0.00007,77.2,now+i*5000,6));
+  const measured=pathDistance(walk);
+  assert.ok(measured>140&&measured<170,`Expected ~156m, got ${measured}`);
+  assert.equal(walk.length,21);
+  assert.ok(pathDistance([point(28.6,77.2,now,5),point(28.6,77.203,now+20000,5)])>280);
+});
+test('journey distance rejects teleporting and out-of-order samples',()=>{
+  const base=point(28.6,77.2,now,5),glitch=point(29.6,78.2,now+5000,5),later=point(28.6001,77.2,now+10000,5);
+  assert.ok(pathDistance([base,glitch,later])>9&&pathDistance([base,glitch,later])<15);
+  assert.equal(pathDistance([base,point(28.61,77.2,now-1000,5)]),0);
+  assert.equal(pathDistance([base,point(28.61,77.2,now+3000,100)]),0);
+});
+test('long GPS outages are not counted as straight-line travel',()=>{
+  const before=point(28.6,77.2,now,5),after=point(28.62,77.2,now+180000,5);
+  assert.equal(pathDistance([before,after]),0);
+  assert.ok(pathDistance([before,after,point(28.6201,77.2,now+185000,5)])>9);
+});
+test('ride end includes only a newer real fix, never a demo or stale coordinate',()=>{
+  const start=point(28.6,77.2,now,5),record={...trip([start]),start:now-1000};
+  const current=point(28.6001,77.2,now+5000,8);
+  assert.deepEqual(finalJourneyFix(record,current,now+5500),current);
+  assert.equal(finalJourneyFix({...record,demo:true},current,now+5500),null);
+  assert.equal(finalJourneyFix(record,{...current,time:now-50000},now+5500),null);
+  assert.equal(finalJourneyFix(record,{...current,time:now-500},now+5500),null);
+  assert.equal(finalJourneyFix(record,{...current,accuracy:120},now+5500),null);
+});
