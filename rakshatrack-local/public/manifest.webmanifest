@@ -1,0 +1,18 @@
+{
+  "name": "RakshaTrack",
+  "short_name": "RakshaTrack",
+  "description": "Your journey. Your safety. Your control.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f8f6",
+  "theme_color": "#165e47",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "scope": "./"
+}

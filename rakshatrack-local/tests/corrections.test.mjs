@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {acceptLocation,initialZoom,locationDescription} from '../src/lib/location.ts';
+import {emergencyText,smsLink} from '../src/lib/emergency.ts';
+import {parsePlaces} from '../src/lib/search.ts';
+const now=1000000;
+const fix=(accuracy=10,time=now)=>({lat:28.61,lng:77.21,accuracy,time,speed:null});
+test('fresh precise location is accepted; malformed and stale fixes are not',()=>{assert.equal(acceptLocation(null,fix(),now),true);assert.equal(acceptLocation(null,{...fix(),lat:NaN},now),false);assert.equal(acceptLocation(null,{...fix(),lat:95},now),false);assert.equal(acceptLocation(null,fix(10,now-120000),now),false);assert.equal(acceptLocation(null,fix(10,now+20000),now),false);});
+test('network drift does not replace a fresh precise GPS fix',()=>{assert.equal(acceptLocation(fix(10,now-5000),fix(1200),now),false);assert.equal(acceptLocation(fix(1000,now-5000),fix(12),now),true);assert.equal(acceptLocation(fix(10,now-30000),fix(1200),now),true);assert.equal(acceptLocation(fix(10),fix(10,now-1000),now),false);assert.equal(acceptLocation(fix(10),fix(10),now),false,'same timestamp is not a new GPS fix');});
+test('initial framing reflects precision and coordinates show uncertainty',()=>{assert.ok(initialZoom(fix(10))>initialZoom(fix(1500)));assert.equal(initialZoom(null),5);assert.match(locationDescription(fix(800,now-90000),now),/±800 m.*90s old/);});
+test('cannot-speak SOS asks not to call and includes a timestamped location',()=>{const text=emergencyText('Aryan',fix(),true,true);assert.match(text,/cannot speak/);assert.match(text,/DO NOT CALL/);assert.match(text,/1970-01-01T00:16:40/);assert.match(text,/accuracy ±10 m/);assert.match(text,/28.61,77.21/);assert.doesNotMatch(text,/Please call to verify/);});
+test('SOS can still be texted without location-sharing consent',()=>{const text=emergencyText('Aryan',fix(),true,false);assert.match(text,/DO NOT CALL/);assert.match(text,/Location was not shared/);assert.doesNotMatch(text,/77.21|google.com\/maps/);});
+test('a verification message does not falsely claim an SOS',()=>{const text=emergencyText('Aryan',fix(),false,true,false);assert.match(text,/^Safety check:/);assert.doesNotMatch(text,/^SOS:/);});
+test('SMS deep links encode message text and use platform-specific separators',()=>{assert.equal(smsLink('+91 98765-43210','Do not call','Android'),'sms:+919876543210?body=Do%20not%20call');assert.equal(smsLink('+91 98765-43210','Do not call','iPhone'),'sms:+919876543210&body=Do%20not%20call');});
+test('place search returns selectable coordinates while rejecting invalid results',()=>{const results=parsePlaces([{name:'Campus',display_name:'Campus, New Delhi, India',lat:'28.6',lon:'77.2'},{display_name:'Bad coordinates',lat:'999',lon:'0'},{lat:'NaN',lon:'77.2'}]);assert.equal(results.length,1);assert.equal(results[0].lat,28.6);assert.equal(results[0].source,'osm');assert.deepEqual(parsePlaces(null),[]);});
