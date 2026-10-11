@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {distance,pathDistance,finalJourneyFix,routeDistance,detectConcern,initialState,makeIncident,nextContact,locationLabel,mergeState} from '../src/lib/safety.ts';
+import {distance,pathDistance,finalJourneyFix,routeDistance,detectConcern,assessJourneySafety,acceptAlternateRoute,shouldOpenSafetyCheck,monitorRecovery,initialState,makeIncident,nextContact,locationLabel,mergeState} from '../src/lib/safety.ts';
 const now=1000000;
 const point=(lat,lng,time=now,accuracy=10)=>({lat,lng,time,accuracy,speed:8});
 const route=[point(28.6,77.2),point(28.62,77.2)];
@@ -49,4 +49,45 @@ test('ride end includes only a newer real fix, never a demo or stale coordinate'
   assert.equal(finalJourneyFix(record,{...current,time:now-50000},now+5500),null);
   assert.equal(finalJourneyFix(record,{...current,time:now-500},now+5500),null);
   assert.equal(finalJourneyFix(record,{...current,accuracy:120},now+5500),null);
+});
+
+test('safety monitor ignores stale fixes, GPS gaps and impossible jumps',()=>{
+ const off=Array.from({length:8},(_,i)=>point(28.605+i*.0006,77.21,now-70000+i*10000));
+ assert.equal(assessJourneySafety(trip(off),initialState.settings,now).concern,'Persistent route deviation');
+ const gap=[off[0],off[1],off[7]];
+ assert.equal(assessJourneySafety(trip(gap),initialState.settings,now).concern,null);
+ assert.equal(assessJourneySafety(trip(off.map(p=>({...p,time:p.time-50000})),initialState.settings,now).tracking,'stale');
+ const jumps=[point(28.61,77.2,now-20000),point(28.612,77.2,now-10000),point(28.7,77.3,now)];
+ assert.equal(assessJourneySafety(trip(jumps),initialState.settings,now).tracking,'unreliable');
+});
+test('stationary off-route readings do not imply moving route deviation',()=>{
+ const samples=Array.from({length:6},(_,i)=>point(28.61,77.21,now-75000+i*15000));
+ assert.equal(assessJourneySafety(trip(samples),initialState.settings,now).route,'possible_deviation');
+ assert.equal(detectConcern(trip(samples),initialState.settings,now),null);
+});
+test('prolonged stop requires continuous accurate readings and is ignored near destination',()=>{
+ const samples=Array.from({length:11},(_,i)=>point(28.605,77.2,now-300000+i*30000,12));
+ assert.equal(detectConcern(trip(samples,null),initialState.settings,now),'Unusual stop');
+ assert.equal(detectConcern(trip(samples.filter((_,i)=>i===0||i>=8),null),initialState.settings,now),null);
+ assert.equal(detectConcern(trip(samples.map(p=>({...p,accuracy:65})),null),initialState.settings,now),null);
+ const destination=Array.from({length:11},(_,i)=>point(28.62,77.2,now-300000+i*30000,10));
+ assert.equal(assessJourneySafety(trip(destination),initialState.settings,now).stop,'at_destination');
+});
+test('repeat check requires persistent recovery event',()=>{
+ const t=trip([]),reason='Persistent route deviation',event={id:'alert',time:now-240000,type:'concern',message:reason};
+ assert.equal(shouldOpenSafetyCheck(t,reason,now),true);
+ assert.equal(shouldOpenSafetyCheck({...t,events:[event]},reason,now),false);
+ assert.equal(shouldOpenSafetyCheck({...t,events:[event,{id:'r',time:now-190000,type:'monitor_recovered',message:reason}]},reason,now),true);
+});
+test('approved alternative route keeps original trail and resets deviation evidence window',()=>{
+ const pts=Array.from({length:8},(_,i)=>point(28.605+i*.0006,77.21,now-70000+i*10000));
+ const t=trip(pts),next=[point(28.6,77.21,now,0),point(28.62,77.21,now,0),point(28.62,77.2,now,0)];
+ assert.equal(detectConcern(t,initialState.settings,now),'Persistent route deviation');
+ const approved=acceptAlternateRoute(t,next,now-1000,'yes');
+ assert.equal(approved.route,next);
+ assert.deepEqual(approved.routeHistory,[t.route]);assert.deepEqual(approved.points,t.points);
+ assert.equal(assessJourneySafety(approved,initialState.settings,now).concern,null);
+ const invalid=[next[0],point(29,78,now,0)];
+ assert.equal(acceptAlternateRoute(t,invalid,now),t);
+ const demo={...t,demo:true};assert.equal(acceptAlternateRoute(demo,next,now),demo);
 });
