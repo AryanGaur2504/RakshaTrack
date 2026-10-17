@@ -25,10 +25,15 @@ jobs:
           cache-dependency-path: rakshatrack-local/package-lock.json
       - run: npm ci
       - run: npm test
-      - uses: actions/configure-pages@v5
-      - run: npm run build:pages
+      - name: Configure Pages and resolve current site URL
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Build for configured Pages path
+        run: npm run build:pages
         env:
-          PAGES_BASE_PATH: ${{ vars.PAGES_BASE_PATH }}
+          # GitHub Pages project URLs change when a repository is renamed.
+          # '/' also handles a root custom domain without guessing the repo name.
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path || '/' }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ vars.GOOGLE_MAPS_MAP_ID }}
       - uses: actions/upload-pages-artifact@v3
