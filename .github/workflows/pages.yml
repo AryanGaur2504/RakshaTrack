@@ -36,6 +36,26 @@ jobs:
           PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path || '/' }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ vars.GOOGLE_MAPS_MAP_ID }}
+      - name: Verify published files and paths
+        run: |
+          test -s dist/index.html
+          test -s dist/manifest.webmanifest
+          test -s dist/sw.js
+          node --input-type=module <<'NODE'
+          import {readFileSync,readdirSync} from 'node:fs';
+          const html=readFileSync('dist/index.html','utf8');
+          const js=[...html.matchAll(/<script[^>]+src="([^"]+)"/g)].map(x=>x[1]);
+          const css=[...html.matchAll(/<link[^>]+href="([^"]+\.css)"/g)].map(x=>x[1]);
+          const assets=[...js,...css];
+          const base='/'+(process.env.EXPECTED_BASE||'').split('/').filter(Boolean).join('/');
+          const normalizedBase=base==='/'?'/':base+'/';
+          if(!assets.length||assets.some(p=>!p.startsWith(normalizedBase)))throw Error('Invalid generated asset base: '+JSON.stringify({base:normalizedBase,assets}));
+          const names=readdirSync('dist/assets');
+          if(!names.some(x=>x.endsWith('.js'))||!names.some(x=>x.endsWith('.css')))throw Error('Missing JS or CSS bundles');
+          console.log('Validated '+assets.length+' asset references using base '+normalizedBase);
+          NODE
+        env:
+          EXPECTED_BASE: ${{ steps.pages.outputs.base_path }}/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: rakshatrack-local/dist
