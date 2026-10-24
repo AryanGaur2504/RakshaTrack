@@ -10,8 +10,8 @@ self.addEventListener('push',event=>{
   vibrate:emergency?[350,150,350,150,650]:[180,100,180],
   icon:'/guardian/icon.svg',
   badge:'/guardian/icon.svg',
-  data:{url:'/guardian/'},
+  data:{url:'/?alert=1'},
   actions:[{action:'open',title:'Open alert'}]
  }));
 });
-self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.openWindow('/guardian/'));});
+self.addEventListener('notificationclick',e=>{e.notification.close();e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(async windows=>{const app=windows.find(w=>{try{return new URL(w.url).origin===self.location.origin&&new URL(w.url).pathname==='/'}catch{return false}});if(app){await app.focus();return app.navigate('/?alert=1')}return clients.openWindow('/?alert=1')}));});
