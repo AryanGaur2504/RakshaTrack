@@ -40,6 +40,7 @@ export class LocationSession{
   private preciseStartedAt=0;
   private lastRequestAt=0;
   private lastWatchStartAt=0;
+  private sessionStartedAt=0;
   private lastFreshAt=0;
   private lastPositionTimestamp=0;
   private watchdog:ReturnType<typeof setInterval>|null=null;
@@ -57,6 +58,7 @@ export class LocationSession{
     this.generation++;
     this.foreground=true;
     this.lastFreshAt=0;
+    this.sessionStartedAt=this.clock.now();
     this.lastPositionTimestamp=0;
     this.lastRequestAt=0;
     this.lastCoarseRequestAt=this.clock.now();
@@ -204,7 +206,7 @@ export class LocationSession{
     // 10 seconds, avoiding competing with a healthy continuous GPS stream.
     const age=this.lastFreshAt?now-this.lastFreshAt:now-this.lastWatchStartAt;
     if(age>=GPS_POLL_MS&&now-this.lastRequestAt>=GPS_POLL_MS)this.precise('auto');
-    if(age>=COARSE_WATCH_AFTER_MS&&this.coarseWatchId===null)this.startCoarseWatch();
+    if((this.lastFreshAt?age>=COARSE_WATCH_AFTER_MS:now-this.sessionStartedAt>=COARSE_WATCH_AFTER_MS)&&this.coarseWatchId===null)this.startCoarseWatch();
     if(age>=GPS_STALE_MS){
       if(now-this.lastCoarseRequestAt>=GPS_STALE_MS)this.coarseFallback();
       if(now-this.lastWatchStartAt>=GPS_STALE_MS)this.startWatch();
