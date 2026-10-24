@@ -25,6 +25,7 @@ export function createGuardian(opts={}){
  CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY,user_id TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS invites(key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,label TEXT NOT NULL,expires INTEGER NOT NULL,used_by TEXT);
  CREATE TABLE IF NOT EXISTS contacts(owner_id TEXT NOT NULL,contact_id TEXT NOT NULL,label TEXT NOT NULL,created INTEGER NOT NULL,PRIMARY KEY(owner_id,contact_id));
+ CREATE TABLE IF NOT EXISTS contact_requests(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,recipient_id TEXT NOT NULL,label TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',created INTEGER NOT NULL,updated INTEGER NOT NULL,UNIQUE(owner_id,recipient_id));
  CREATE TABLE IF NOT EXISTS subscriptions(endpoint TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,sender_id TEXT NOT NULL,kind TEXT NOT NULL,message TEXT NOT NULL,lat REAL,lng REAL,created INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS deliveries(alert_id TEXT NOT NULL,contact_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',push_status TEXT NOT NULL DEFAULT 'pending',reply TEXT,updated INTEGER NOT NULL,PRIMARY KEY(alert_id,contact_id));`);
@@ -34,6 +35,9 @@ export function createGuardian(opts={}){
   session:db.prepare('SELECT user_id,expires FROM sessions WHERE key=?'),
   related:db.prepare('SELECT 1 FROM contacts WHERE owner_id=? AND contact_id=?'),
   contacts:db.prepare('SELECT u.id,u.handle,u.name,c.label,c.created FROM contacts c JOIN users u ON u.id=c.contact_id WHERE c.owner_id=? ORDER BY c.created ASC'),
+  trustedBy:db.prepare('SELECT u.id,u.handle,u.name,c.label,c.created FROM contacts c JOIN users u ON u.id=c.owner_id WHERE c.contact_id=? ORDER BY c.created DESC'),
+  requests:db.prepare("SELECT r.id,r.label,r.created,u.name owner_name,u.handle owner_handle FROM contact_requests r JOIN users u ON u.id=r.owner_id WHERE r.recipient_id=? AND r.status='pending' ORDER BY r.created DESC"),
+  outgoing:db.prepare("SELECT r.id,r.label,r.created,r.status,u.handle recipient_handle,u.name recipient_name FROM contact_requests r JOIN users u ON u.id=r.recipient_id WHERE r.owner_id=? AND r.status='pending' ORDER BY r.created DESC"),
   inbox:db.prepare('SELECT a.id,a.kind,a.message,a.created,a.lat,a.lng,d.status,d.reply,d.updated,u.handle sender_handle,u.name sender_name FROM deliveries d JOIN alerts a ON a.id=d.alert_id JOIN users u ON u.id=a.sender_id WHERE d.contact_id=? ORDER BY a.created DESC LIMIT 80'),
   sent:db.prepare('SELECT a.id,a.kind,a.message,a.created,u.handle contact_handle,u.name contact_name,d.status,d.push_status,d.reply,d.updated FROM alerts a JOIN deliveries d ON d.alert_id=a.id JOIN users u ON u.id=d.contact_id WHERE a.sender_id=? ORDER BY a.created DESC LIMIT 120')
  };
@@ -113,7 +117,45 @@ export function createGuardian(opts={}){
     const raw=/(?:^|;\s*)guardian_session=([^;]+)/.exec(req.headers.cookie||'')?.[1];if(raw)db.prepare('DELETE FROM sessions WHERE key=?').run(digest(raw));
     return json(res,200,{ok:true},{'Set-Cookie':cookie('',0)});
    }
-   if(p==='/guardian/api/contacts'&&method==='GET')return json(res,200,{contacts:statements.contacts.all(me.id)});
+   if(p==='/guardian/api/contacts'&&method==='GET')return json(res,200,{contacts:statements.contacts.all(me.id),trustedBy:statements.trustedBy.all(me.id),requests:statements.requests.all(me.id),outgoing:statements.outgoing.all(me.id)});
+   if(p==='/guardian/api/contacts/request'&&method==='POST'){
+    const input=await read(req);
+    const handle=cleanHandle(input.handle),label=safeLabel(input.label);
+    if(!handle||!label)fail(400,'Enter an existing RakshaTrack username and contact label');
+    const other=statements.findUser.get(handle);
+    if(!other)fail(404,'No RakshaTrack account with this username');
+    if(other.id===me.id)fail(400,'You cannot add yourself');
+    if(statements.related.get(me.id,other.id))fail(409,'Already a connected trusted contact');
+    const count=db.prepare('SELECT COUNT(*) n FROM contacts WHERE owner_id=?').get(me.id).n;
+    const waiting=db.prepare("SELECT COUNT(*) n FROM contact_requests WHERE owner_id=? AND status='pending'").get(me.id).n;
+    if(count+waiting>=2)fail(409,'You can have at most two active or pending trusted contacts');
+    const now=Date.now();
+    const existing=db.prepare('SELECT id,status FROM contact_requests WHERE owner_id=? AND recipient_id=?').get(me.id,other.id);
+    if(existing?.status==='pending')fail(409,'Request already sent. Ask the contact to open RakshaTrack');
+    const id=existing?.id||randomUUID();
+    db.prepare("INSERT INTO contact_requests(id,owner_id,recipient_id,label,status,created,updated) VALUES(?,?,?,?,'pending',?,?) ON CONFLICT(owner_id,recipient_id) DO UPDATE SET id=excluded.id,label=excluded.label,status='pending',created=excluded.created,updated=excluded.updated").run(id,me.id,other.id,label,now,now);
+    try{await pushNotify(other.id,{id,kind:'contact_request',sender:me.name,title:'RakshaTrack trusted contact request',body:me.name+' wants to add you as a trusted contact. Open RakshaTrack to review.'});}catch{}
+    return json(res,201,{requested:true,requestId:id,recipient:other.handle,notice:'Waiting for the recipient to accept in RakshaTrack.'});
+   }
+   if(p==='/guardian/api/contacts/respond'&&method==='POST'){
+    const input=await read(req);
+    if(typeof input.requestId!=='string'||!['accept','decline'].includes(input.decision))fail(400,'Invalid request response');
+    const reqRow=db.prepare("SELECT * FROM contact_requests WHERE id=? AND recipient_id=? AND status='pending'").get(input.requestId,me.id);
+    if(!reqRow)fail(404,'Contact request no longer pending');
+    db.exec('BEGIN IMMEDIATE');
+    try{
+     const updated=db.prepare("UPDATE contact_requests SET status=?,updated=? WHERE id=? AND recipient_id=? AND status='pending'").run(input.decision==='accept'?'accepted':'declined',Date.now(),reqRow.id,me.id).changes;
+     if(!updated)fail(409,'Contact request already handled');
+     if(input.decision==='accept')db.prepare('INSERT OR IGNORE INTO contacts(owner_id,contact_id,label,created) VALUES(?,?,?,?)').run(reqRow.owner_id,me.id,reqRow.label,Date.now());
+     db.exec('COMMIT');
+    }catch(e){db.exec('ROLLBACK');throw e;}
+    return json(res,200,{ok:true,decision:input.decision});
+   }
+   if(p==='/guardian/api/contacts/cancel'&&method==='POST'){
+    const input=await read(req);
+    const removed=db.prepare("UPDATE contact_requests SET status='cancelled',updated=? WHERE id=? AND owner_id=? AND status='pending'").run(Date.now(),input.requestId,me.id).changes;
+    return json(res,200,{ok:!!removed});
+   }
    if(p==='/guardian/api/invite'&&method==='POST'){
     const {label}=await read(req);const name=safeLabel(label);if(!name)fail(400,'Contact label required');
     const count=db.prepare('SELECT COUNT(*) n FROM contacts WHERE owner_id=?').get(me.id).n;
