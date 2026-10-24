@@ -137,6 +137,17 @@ export function acceptAlternateRoute(trip:Trip,route:Point[],now=Date.now(),even
 export function detectConcern(trip:Trip,settings:Settings,now=Date.now()):string|null{
   return assessJourneySafety(trip,settings,now).concern;
 }
+// A predictable on-screen check-in is independent of GPS availability.
+// A safety prompt is not evidence of an unusual stop or an SOS. This runs
+// only while a passenger has an active journey and the page is visible.
+export const ROUTINE_CHECK_INTERVAL_MS=120000;
+export function nextRoutineCheckAt(trip:Trip):number{
+  const recent=[...trip.events].reverse().find(e=>e.type==='routine_check'||e.type==='safe');
+  return Math.max(trip.start,recent?.time??trip.start)+ROUTINE_CHECK_INTERVAL_MS;
+}
+export function routineCheckDue(trip:Trip,now=Date.now()):boolean{
+  return trip.status==='active'&&now>=nextRoutineCheckAt(trip);
+}
 // Persist recovery evidence so a dismissed check doesn't reappear on reload.
 export function shouldOpenSafetyCheck(trip:Trip,reason:string,now=Date.now()):boolean{
   const lastConcern=[...trip.events].reverse().find(e=>e.type==='concern');
