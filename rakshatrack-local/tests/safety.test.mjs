@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {distance,pathDistance,finalJourneyFix,routeDistance,detectConcern,assessJourneySafety,acceptAlternateRoute,shouldOpenSafetyCheck,monitorRecovery,initialState,makeIncident,nextContact,locationLabel,mergeState} from '../src/lib/safety.ts';
+import {distance,pathDistance,finalJourneyFix,routeDistance,detectConcern,assessJourneySafety,acceptAlternateRoute,shouldOpenSafetyCheck,monitorRecovery,initialState,makeIncident,nextContact,locationLabel,mergeState,routineCheckDue,nextRoutineCheckAt,ROUTINE_CHECK_INTERVAL_MS} from '../src/lib/safety.ts';
 const now=1000000;
 const point=(lat,lng,time=now,accuracy=10)=>({lat,lng,time,accuracy,speed:8});
 const route=[point(28.6,77.2),point(28.62,77.2)];
@@ -103,3 +103,5 @@ test('deviation only prompts after uninterrupted two-minute evidence',()=>{
  assert.equal(detectConcern(trip(points),initialState.settings,now),'Persistent route deviation');
  assert.equal(detectConcern(trip(points.slice(1)),initialState.settings,now),null);
 });
+
+test('two minute reminder fires without GPS and resets only after a recorded prompt or response',()=>{const t=trip([]);const current={...t,start:now-120000,points:[]};assert.equal(ROUTINE_CHECK_INTERVAL_MS,120000);assert.equal(routineCheckDue(current,now),true);assert.equal(routineCheckDue({...current,start:now-119999},now),false);const done={...current,events:[{id:'a',type:'routine_check',time:now,message:'Check'}]};assert.equal(nextRoutineCheckAt(done),now+120000);assert.equal(routineCheckDue(done,now+120000),true);assert.equal(routineCheckDue({...done,status:'completed'},now+120000),false);});
