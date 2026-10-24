@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
-      - run: npx expo install --fix --non-interactive
+      - run: CI=1 npx expo install --fix
       - run: npm run typecheck
       - run: npm test
       - run: npx expo config --type public
