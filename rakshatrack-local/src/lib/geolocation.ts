@@ -10,10 +10,9 @@ export function locationHelp(issue:LocationIssue):string{
 
 export const GPS_POLL_MS=10000;
 export const GPS_STALE_MS=30000;
-const WATCH_TIMEOUT_MS=30000;
+const WATCH_TIMEOUT_MS=20000;
 const PRECISE_TIMEOUT_MS=12000;
 const WATCHDOG_TICK_MS=2500;
-const COARSE_WATCH_AFTER_MS=40000;
 
 // Continuous watchPosition events drive the live marker. A timer only recovers
 // from device/browser stalls; it is never the normal animation cadence.
@@ -27,8 +26,6 @@ const systemClock:Clock={now:()=>Date.now(),setInterval:(fn,ms)=>setInterval(fn,
 
 export class LocationSession{
   watchId:number|null=null;
-  coarseWatchId:number|null=null;
-  private coarseWatchEpoch=0;
   private generation=0;
   private watchEpoch=0;
   private quickId=0;
@@ -40,7 +37,6 @@ export class LocationSession{
   private preciseStartedAt=0;
   private lastRequestAt=0;
   private lastWatchStartAt=0;
-  private sessionStartedAt=0;
   private lastFreshAt=0;
   private lastPositionTimestamp=0;
   private watchdog:ReturnType<typeof setInterval>|null=null;
@@ -58,7 +54,6 @@ export class LocationSession{
     this.generation++;
     this.foreground=true;
     this.lastFreshAt=0;
-    this.sessionStartedAt=this.clock.now();
     this.lastPositionTimestamp=0;
     this.lastRequestAt=0;
     this.lastCoarseRequestAt=this.clock.now();
@@ -80,8 +75,7 @@ export class LocationSession{
   // Recovery on resume is immediate, without treating an old fix as new.
   setForeground(visible:boolean){
     this.foreground=visible;
-    if(!visible){this.closeCoarseWatch();return;}
-    if(this.watchId===null)return;
+    if(!visible||this.watchId===null)return;
     this.startWatch();
     this.precise('manual');
   }
@@ -93,7 +87,6 @@ export class LocationSession{
     this.coarseId++;
     this.preciseId++;
     this.precisePending=false;
-    this.closeCoarseWatch();
     if(this.watchdog!==null){this.clock.clearInterval(this.watchdog);this.watchdog=null;}
     if(this.watchId!==null)this.geo.clearWatch(this.watchId);
     this.watchId=null;
@@ -116,30 +109,6 @@ export class LocationSession{
     );
   }
 
-  private closeCoarseWatch(){
-    ++this.coarseWatchEpoch;
-    if(this.coarseWatchId!==null)this.geo.clearWatch(this.coarseWatchId);
-    this.coarseWatchId=null;
-  }
-
-  // Some Android providers never return a satellite-quality fix even with
-  // permission. After a grace period, keep an independent network/coarse
-  // watcher so real approximate coordinates can still reach the map.
-  // Approximate fixes do not qualify for precise route safety decisions.
-  private startCoarseWatch(){
-    if(this.coarseWatchId!==null)return;
-    const generation=this.generation,epoch=++this.coarseWatchEpoch;
-    this.coarseWatchId=this.geo.watchPosition(
-      p=>{if(generation===this.generation&&epoch===this.coarseWatchEpoch)this.emit(p);},
-      e=>{
-        if(generation!==this.generation||epoch!==this.coarseWatchEpoch)return;
-        if(e.code===1){this.stop();this.onError(e);return;}
-        if(!this.lastFreshAt||this.clock.now()-this.lastFreshAt>=GPS_STALE_MS)this.onError(e);
-      },
-      {enableHighAccuracy:false,maximumAge:10000,timeout:30000}
-    );
-  }
-
   private emit(p:GeolocationPosition){
     const now=this.clock.now();
     // Never send cached duplicates, out-of-order or invalid readings to the UI.
@@ -150,7 +119,6 @@ export class LocationSession{
       !Number.isFinite(p.coords.accuracy))return;
     this.lastPositionTimestamp=p.timestamp;
     this.lastFreshAt=p.timestamp; // OS fix time, not callback receipt time.
-    if(p.coords.accuracy<=75)this.closeCoarseWatch();
     this.onPosition(p);
   }
 
@@ -160,7 +128,7 @@ export class LocationSession{
     this.geo.getCurrentPosition(
       p=>{if(current())this.emit(p);},
       e=>{if(!current())return;if(e.code===1){this.stop();this.onError(e);}},
-      {enableHighAccuracy:false,maximumAge:30000,timeout:10000}
+      {enableHighAccuracy:false,maximumAge:30000,timeout:4000}
     );
   }
 
@@ -206,7 +174,6 @@ export class LocationSession{
     // 10 seconds, avoiding competing with a healthy continuous GPS stream.
     const age=this.lastFreshAt?now-this.lastFreshAt:now-this.lastWatchStartAt;
     if(age>=GPS_POLL_MS&&now-this.lastRequestAt>=GPS_POLL_MS)this.precise('auto');
-    if((this.lastFreshAt?age>=COARSE_WATCH_AFTER_MS:now-this.sessionStartedAt>=COARSE_WATCH_AFTER_MS)&&this.coarseWatchId===null)this.startCoarseWatch();
     if(age>=GPS_STALE_MS){
       if(now-this.lastCoarseRequestAt>=GPS_STALE_MS)this.coarseFallback();
       if(now-this.lastWatchStartAt>=GPS_STALE_MS)this.startWatch();

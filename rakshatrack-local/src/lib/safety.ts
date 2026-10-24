@@ -6,7 +6,7 @@ export type Trip={id:string;name:string;mode:string;start:number;end?:number;des
 export type Incident={id:string;tripId:string|null;time:number;type:'sos'|'concern';reason:string;status:'checking'|'help_requested'|'resolved';stage:number;contactAt:number;acknowledged:number|null;delivery:string[];resolvedAt?:number;updated:number;demo:boolean;lastLocation?:Point|null;quiet?:boolean};
 export type Settings={name:string;locationConsent:boolean;sharingConsent:boolean;externalMaps:boolean;autoDetect:boolean;checkTimeout:number;contactTimeout:number;deviation:number;stopMinutes:number;retention:number;notifications:boolean};
 export type State={settings:Settings;contacts:Contact[];destinations:Destination[];trips:Trip[];incidents:Incident[]};
-export const initialState:State={settings:{name:'Aryan',locationConsent:false,sharingConsent:false,externalMaps:false,autoDetect:false,checkTimeout:60,contactTimeout:120,deviation:300,stopMinutes:2,retention:30,notifications:false},contacts:[],destinations:[],trips:[],incidents:[]};
+export const initialState:State={settings:{name:'Aryan',locationConsent:false,sharingConsent:false,externalMaps:false,autoDetect:false,checkTimeout:60,contactTimeout:120,deviation:300,stopMinutes:5,retention:30,notifications:false},contacts:[],destinations:[],trips:[],incidents:[]};
 export const demoRoute:Point[]=[[28.6301,77.2198],[28.6312,77.2188],[28.6324,77.2181],[28.6337,77.2174],[28.6350,77.2173],[28.6365,77.2175],[28.6381,77.2176],[28.6396,77.2175],[28.6412,77.2168],[28.6424,77.2155],[28.6439,77.2148],[28.6452,77.2145],[28.6465,77.2141],[28.6478,77.2137],[28.6490,77.2132]].map(([lat,lng])=>({lat,lng,time:0,accuracy:12,speed:8}));
 export function distance(a:Pick<Point,'lat'|'lng'>,b:Pick<Point,'lat'|'lng'>){const rad=Math.PI/180;const dLat=(b.lat-a.lat)*rad,dLng=(b.lng-a.lng)*rad;const x=Math.sin(dLat/2)**2+Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dLng/2)**2;return 6371000*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
 // Distance shown in ride reports is an estimate, not a GPS odometer.
@@ -100,7 +100,7 @@ export function assessJourneySafety(trip:Trip,settings:Settings,now=Date.now()):
         off.push(p);
       }
       const first=off.at(-1);
-      if(first&&off.length>=3&&last.time-first.time>=120000&&distance(first,last)>=50){
+      if(first&&off.length>=3&&last.time-first.time>=45000&&distance(first,last)>=50){
         base.route='deviation';base.concern='Persistent route deviation';
       }
     }else base.route='on_route';
@@ -118,7 +118,7 @@ export function assessJourneySafety(trip:Trip,settings:Settings,now=Date.now()):
   if(first&&stop.length>=3){
     base.stationaryMs=last.time-first.time;
     if(base.stationaryMs>=60000)base.stop='possible_stop';
-    if(base.stationaryMs>=settings.stopMinutes*60000){
+    if(base.stationaryMs>=settings.stopMinutes*60000-15000){
       base.stop='unusual_stop';
       if(!base.concern)base.concern='Unusual stop';
     }
@@ -136,17 +136,6 @@ export function acceptAlternateRoute(trip:Trip,route:Point[],now=Date.now(),even
 }
 export function detectConcern(trip:Trip,settings:Settings,now=Date.now()):string|null{
   return assessJourneySafety(trip,settings,now).concern;
-}
-// A predictable on-screen check-in is independent of GPS availability.
-// A safety prompt is not evidence of an unusual stop or an SOS. This runs
-// only while a passenger has an active journey and the page is visible.
-export const ROUTINE_CHECK_INTERVAL_MS=120000;
-export function nextRoutineCheckAt(trip:Trip):number{
-  const recent=[...trip.events].reverse().find(e=>e.type==='routine_check'||e.type==='safe');
-  return Math.max(trip.start,recent?.time??trip.start)+ROUTINE_CHECK_INTERVAL_MS;
-}
-export function routineCheckDue(trip:Trip,now=Date.now()):boolean{
-  return trip.status==='active'&&now>=nextRoutineCheckAt(trip);
 }
 // Persist recovery evidence so a dismissed check doesn't reappear on reload.
 export function shouldOpenSafetyCheck(trip:Trip,reason:string,now=Date.now()):boolean{

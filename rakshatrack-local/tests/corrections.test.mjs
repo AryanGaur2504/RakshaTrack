@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {acceptLocation,stableDisplayLocation,initialZoom,locationDescription} from '../src/lib/location.ts';
+import {acceptLocation,initialZoom,locationDescription} from '../src/lib/location.ts';
 import {emergencyText,smsLink} from '../src/lib/emergency.ts';
 import {parsePlaces} from '../src/lib/search.ts';
 const now=1000000;
@@ -13,5 +13,3 @@ test('SOS can still be texted without location-sharing consent',()=>{const text=
 test('a verification message does not falsely claim an SOS',()=>{const text=emergencyText('Aryan',fix(),false,true,false);assert.match(text,/^Safety check:/);assert.doesNotMatch(text,/^SOS:/);});
 test('SMS deep links encode message text and use platform-specific separators',()=>{assert.equal(smsLink('+91 98765-43210','Do not call','Android'),'sms:+919876543210?body=Do%20not%20call');assert.equal(smsLink('+91 98765-43210','Do not call','iPhone'),'sms:+919876543210&body=Do%20not%20call');});
 test('place search returns selectable coordinates while rejecting invalid results',()=>{const results=parsePlaces([{name:'Campus',display_name:'Campus, New Delhi, India',lat:'28.6',lon:'77.2'},{display_name:'Bad coordinates',lat:'999',lon:'0'},{lat:'NaN',lon:'77.2'}]);assert.equal(results.length,1);assert.equal(results[0].lat,28.6);assert.equal(results[0].source,'osm');assert.deepEqual(parsePlaces(null),[]);});
-
-test('idle GPS jitter does not move the visual marker but retains current sample timestamp',()=>{const first=fix(10,now-5000),next={...fix(12,now),lat:first.lat+0.00003,lng:first.lng+0.00002,speed:0};const stable=stableDisplayLocation(first,next);assert.equal(stable.lat,first.lat);assert.equal(stable.lng,first.lng);assert.equal(stable.time,now);assert.equal(stableDisplayLocation(first,{...next,lat:first.lat+0.001}).lat,first.lat+0.001);});

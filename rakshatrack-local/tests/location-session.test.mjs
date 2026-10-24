@@ -157,14 +157,3 @@ test('identical submitted searches reuse results without another network call',a
     const controller=new AbortController();controller.abort();await assert.rejects(searchPlaces('Cancelled campus',controller.signal),{name:'AbortError'});assert.equal(calls,1);
   }finally{globalThis.fetch=original;}
 });
-
-test('Android fallback watch starts after no fix and clears on precise GPS recovery',()=>{
- const h=harness();h.session.start();h.advance(42500);
- assert.equal(h.watches.length,3,'high accuracy watch restart plus network watch');
- assert.equal(h.watches[2].options.enableHighAccuracy,false);
- h.watches[2].success({...h.fix(),coords:{latitude:28.61,longitude:77.21,accuracy:450,speed:null}});
- assert.equal(h.positions.at(-1).coords.accuracy,450);
- h.watches[1].success({...h.fix(h.clock.now()+1),coords:{latitude:28.61,longitude:77.21,accuracy:12,speed:0}});
- assert.ok(h.cleared.includes(3),'network watch stops after precise real fix');
- h.session.stop();
-});
