@@ -53,7 +53,7 @@ test('ride end includes only a newer real fix, never a demo or stale coordinate'
 
 test('safety monitor ignores stale fixes, GPS gaps and impossible jumps',()=>{
  const off=Array.from({length:13},(_,i)=>point(28.605+i*.0006,77.21,now-120000+i*10000));
- assert.equal(assessJourneySafety(trip(off),initialState.settings,now).concern,null);
+ assert.equal(assessJourneySafety(trip(off),initialState.settings,now).concern,'Persistent route deviation');
  const gap=[off[0],off[1],off[12]];
  assert.equal(assessJourneySafety(trip(gap),initialState.settings,now).concern,null);
  assert.equal(assessJourneySafety(trip(off.map(p=>({...p,time:p.time-50000}))),initialState.settings,now).tracking,'stale');
