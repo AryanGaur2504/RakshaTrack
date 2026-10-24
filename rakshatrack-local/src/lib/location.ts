@@ -1,4 +1,4 @@
-import {distance,type Point} from './safety';
+import {distance,type Point} from './safety.ts';
 function validPoint(p:Point){return Number.isFinite(p.lat)&&Number.isFinite(p.lng)&&Math.abs(p.lat)<=90&&Math.abs(p.lng)<=180&&Number.isFinite(p.accuracy)&&p.accuracy>=0&&Number.isFinite(p.time);}
 export function acceptLocation(previous:Point|null,next:Point,now=Date.now()):boolean{
   if(!validPoint(next)||now-next.time>60000||next.time>now+10000)return false;
