@@ -8,7 +8,7 @@ const trip=(points,destination={id:'d',name:'College',lat:28.62,lng:77.2,address
 test('Haversine and segment distance are measured in metres',()=>{assert.ok(distance(point(0,0),point(0,1))>111000);assert.ok(distance(point(0,0),point(0,1))<111300);assert.ok(routeDistance(point(28.61,77.2),route)<1);assert.ok(routeDistance(point(28.61,77.21),route)>900);});
 test('ordinary movement along road geometry does not raise a concern',()=>{assert.equal(detectConcern(trip([point(28.605,77.2,now-60000),point(28.607,77.2,now-30000),point(28.61,77.2)]),initialState.settings,now),null);});
 test('one brief GPS drift is not a concern',()=>{assert.equal(detectConcern(trip([point(28.605,77.2,now-60000),point(28.607,77.2,now-30000),point(28.61,77.22)]),initialState.settings,now),null);});
-test('persistent credible deviation begins verification',()=>{assert.equal(detectConcern(trip([point(28.605,77.22,now-60000),point(28.607,77.22,now-30000),point(28.61,77.22)]),initialState.settings,now),'Persistent route deviation');});
+test('persistent credible deviation begins verification after 2 minutes',()=>{const pts=Array.from({length:9},(_,i)=>point(28.605+i*.0006,77.22,now-120000+i*15000));assert.equal(detectConcern(trip(pts),initialState.settings,now),'Persistent route deviation');});
 test('low confidence and stale GPS are excluded',()=>{const pts=[point(28.605,77.22,now-60000,100),point(28.607,77.22,now-30000,100),point(28.61,77.22,now,100)];assert.equal(detectConcern(trip(pts),initialState.settings,now),null);assert.equal(detectConcern(trip(pts.map(p=>({...p,accuracy:10,time:p.time-120000}))),initialState.settings,now),null);});
 test('unknown destination never claims a route deviation',()=>{const pts=[point(28.605,77.22,now-60000),point(28.607,77.22,now-30000),point(28.61,77.22)];assert.equal(detectConcern(trip(pts,null),initialState.settings,now),null);});
 test('five minute stop is detected, including unknown destination',()=>{const pts=Array.from({length:11},(_,i)=>point(28.605,77.2,now-300000+i*30000));assert.equal(detectConcern(trip(pts,null),initialState.settings,now),'Unusual stop');});
@@ -52,9 +52,9 @@ test('ride end includes only a newer real fix, never a demo or stale coordinate'
 });
 
 test('safety monitor ignores stale fixes, GPS gaps and impossible jumps',()=>{
- const off=Array.from({length:8},(_,i)=>point(28.605+i*.0006,77.21,now-70000+i*10000));
+ const off=Array.from({length:13},(_,i)=>point(28.605+i*.0006,77.21,now-120000+i*10000));
  assert.equal(assessJourneySafety(trip(off),initialState.settings,now).concern,'Persistent route deviation');
- const gap=[off[0],off[1],off[7]];
+ const gap=[off[0],off[1],off[12]];
  assert.equal(assessJourneySafety(trip(gap),initialState.settings,now).concern,null);
  assert.equal(assessJourneySafety(trip(off.map(p=>({...p,time:p.time-50000}))),initialState.settings,now).tracking,'stale');
  const jumps=[point(28.61,77.2,now-20000),point(28.612,77.2,now-10000),point(28.7,77.3,now)];
@@ -82,7 +82,7 @@ test('repeat check requires persistent recovery event',()=>{
 test('approved alternative route keeps original trail and resets deviation evidence window',()=>{
  const pts=Array.from({length:8},(_,i)=>point(28.605+i*.0006,77.21,now-70000+i*10000));
  const t=trip(pts),next=[point(28.6,77.21,now,0),point(28.62,77.21,now,0),point(28.62,77.2,now,0)];
- assert.equal(detectConcern(t,initialState.settings,now),'Persistent route deviation');
+ assert.equal(detectConcern(t,initialState.settings,now),null);
  const approved=acceptAlternateRoute(t,next,now-1000,'yes');
  assert.equal(approved.route,next);
  assert.deepEqual(approved.routeHistory,[t.route]);assert.deepEqual(approved.points,t.points);
@@ -90,4 +90,16 @@ test('approved alternative route keeps original trail and resets deviation evide
  const invalid=[next[0],point(29,78,now,0)];
  assert.equal(acceptAlternateRoute(t,invalid,now),t);
  const demo={...t,demo:true};assert.equal(acceptAlternateRoute(demo,next,now),demo);
+});
+
+test('two-minute credible stationary stop asks a safety check, but not before',()=>{
+ const points=Array.from({length:9},(_,i)=>point(28.605,77.2,now-120000+i*15000,10));
+ assert.equal(initialState.settings.stopMinutes,2);
+ assert.equal(assessJourneySafety(trip(points,null),initialState.settings,now).concern,'Unusual stop');
+ assert.equal(assessJourneySafety(trip(points.slice(1),null),initialState.settings,now).concern,null);
+});
+test('deviation only prompts after uninterrupted two-minute evidence',()=>{
+ const points=Array.from({length:9},(_,i)=>point(28.605+i*.0006,77.21,now-120000+i*15000,10));
+ assert.equal(detectConcern(trip(points),initialState.settings,now),'Persistent route deviation');
+ assert.equal(detectConcern(trip(points.slice(1)),initialState.settings,now),null);
 });
