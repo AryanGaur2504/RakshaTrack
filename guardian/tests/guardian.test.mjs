@@ -63,7 +63,6 @@ test('Reject forged origins, invalid push endpoint, invalid replies, and unauthe
   await call('register',register('Passenger'),'passenger');
   assert.equal((await call('alerts',{kind:'sos',message:'Alarm'})).status,401);
   assert.equal((await call('push/subscribe',{subscription:{endpoint:'https://attacker.example/push',keys:{auth:'foo',p256dh:'bar'}}},'passenger')).status,400);
-  const a=await fetch('http://127.0.0.1:'+0).catch(()=>null);
   assert.equal((await call('alerts',{kind:'other',message:'X'},'passenger')).status,400);
  }finally{await stop();}
 });
