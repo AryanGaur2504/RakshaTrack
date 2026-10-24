@@ -76,6 +76,7 @@ export function createGuardian(opts={}){
     if(p==='/guardian'||p==='/guardian/')return serveFile(req,res,join(here,'index.html'));
     if(p==='/guardian/sw.js')return serveFile(req,res,join(here,'sw.js'));
     if(p==='/guardian/app.js')return serveFile(req,res,join(here,'app.js'));
+    if(p==='/guardian/icon.svg')return serveFile(req,res,join(here,'icon.svg'));
     // The same-origin production service can also serve the existing Vite app.
     const file=p==='/'?join(assets,'index.html'):resolve(assets,'.'+decodeURIComponent(p));
     if(file!==assets&&!file.startsWith(assets+sep))return json(res,403,{error:'Path rejected'});
