@@ -71,6 +71,7 @@ export function createGuardian(opts={}){
     if(!sentOrigin||sentOrigin!==expected)return json(res,403,{error:'Origin verification failed'});
     if(!(req.headers['content-type']||'').startsWith('application/json'))return json(res,415,{error:'JSON required'});
    }
+   if(p==='/health'&&method==='GET')return json(res,200,{ok:true,service:'rakshatrack-guardian',persistent:!!process.env.GUARDIAN_DATA_DIR&& !process.env.GUARDIAN_DATA_DIR.startsWith('/tmp')});
    if(!api){
     if(method!=='GET'&&method!=='HEAD')return json(res,405,{error:'Method not allowed'});
     if(p==='/guardian'||p==='/guardian/')return serveFile(req,res,join(here,'index.html'));
