@@ -11,7 +11,7 @@ export function locationHelp(issue:LocationIssue):string{
 export const GPS_POLL_MS=10000;
 export const GPS_STALE_MS=30000;
 const WATCH_TIMEOUT_MS=20000;
-const PRECISE_TIMEOUT_MS=12000;
+const PRECISE_TIMEOUT_MS=20000;
 const WATCHDOG_TICK_MS=2500;
 
 // Continuous watchPosition events drive the live marker. A timer only recovers
@@ -128,7 +128,7 @@ export class LocationSession{
     this.geo.getCurrentPosition(
       p=>{if(current())this.emit(p);},
       e=>{if(!current())return;if(e.code===1){this.stop();this.onError(e);}},
-      {enableHighAccuracy:false,maximumAge:30000,timeout:4000}
+      {enableHighAccuracy:false,maximumAge:30000,timeout:10000}
     );
   }
 
