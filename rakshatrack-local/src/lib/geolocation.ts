@@ -10,8 +10,8 @@ export function locationHelp(issue:LocationIssue):string{
 
 export const GPS_POLL_MS=10000;
 export const GPS_STALE_MS=30000;
-const WATCH_TIMEOUT_MS=20000;
-const PRECISE_TIMEOUT_MS=20000;
+const WATCH_TIMEOUT_MS=30000;
+const PRECISE_TIMEOUT_MS=12000;
 const WATCHDOG_TICK_MS=2500;
 
 // Continuous watchPosition events drive the live marker. A timer only recovers
