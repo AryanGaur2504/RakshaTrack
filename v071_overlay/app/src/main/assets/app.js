@@ -1,0 +1,267 @@
+(function(){'use strict';
+const E=window.SimEngine, X=window.SimExams;
+const STORE='simplus:v1:private', EXAMS='simplus:v3:results';
+let activeAttendanceKey=STORE,activeResultsKey=EXAMS;
+let rosterReady=false,rosterStudents=[],rosterSelected=-1,rosterProfile=null;
+let rosterImporting=false,rosterImportError='',rosterImportNote='';
+const now=()=>E.iso(new Date());
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct=(n,places=1)=>Number.isFinite(n)?Number(n).toFixed(places)+'%':'—';
+const dateHuman=s=>{if(!s)return 'Not set';const [y,m,d]=s.split('-');return [d,m,y].filter(Boolean).join('/');};
+const shortDay=s=>{const d=new Date(s+'T12:00:00');return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});};
+const safeSubject=s=>esc(String(s||'').slice(0,110));
+const defaultState={setup:false,start:'',target:75,dark:false,subjects:[],records:[],windows:[],lastSync:'',lastReport:'',selectedSubject:'all',rangeEnd:now(),semesterPct:null,monthly:[],subjectPcts:[],profile:{name:'',roll:'',program:'',semester:'',college:'',session:'',admission:'',father:''}};
+let state={...defaultState}, resultState={records:[],lastSync:'',source:'',dobReady:false};
+try{let stored=JSON.parse(localStorage.getItem(STORE)||'{}');if(stored&&typeof stored==='object')state={...defaultState,...stored,profile:{...defaultState.profile,...(stored.profile||{})}};}catch(e){}
+try{let stored=JSON.parse(localStorage.getItem(EXAMS)||'{}');if(stored&&typeof stored==='object')resultState={...resultState,...stored,records:Array.isArray(stored.records)?stored.records:[]};}catch(e){}
+const PAGES={home:['Overview','Your campus, beautifully organized.'],attendance:['Attendance','Understand your presence, not just a percentage.'],results:['Exam results','All available results, in one clean view.'],profile:['Your profile','Your personal academic workspace.']};
+let page='home',attTab='subjects',examTab='college',historyFilter='all',modalOpen=false;
+const icons={home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',attendance:'<path d="M3 3v18h18M7 16l4-5 3 2 5-7"/>',results:'<path d="M7 2h10l4 4v16H3V2h4Zm0 5h10M7 12h10M7 17h7"/>',profile:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-5 3-7 8-7s8 2 8 7"/>',chevron:'<path d="m9 18 6-6-6-6"/>',refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5 9a8 8 0 0 1 14-2l1 5M4 12l1 5a8 8 0 0 0 14-2"/>',graduation:'<path d="m2 10 10-5 10 5-10 5-10-5Zm4 3v5c3 3 9 3 12 0v-5M22 10v7"/>',calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/>'};
+function icon(name){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.home}</svg>`;}
+function native(method,...args){try{if(window.Native&&typeof Native[method]==='function'){Native[method](...args);return true;}}catch(e){toast('App bridge unavailable: '+e.message);}return false;}
+function persist(){
+ const saved={...state,profile:{...(state.profile||{})}};
+ for(const field of ['dob','correspondenceAddress','permanentAddress','photoUrl'])delete saved.profile[field];
+ localStorage.setItem(activeAttendanceKey,JSON.stringify(saved));
+}
+function persistResults(){localStorage.setItem(activeResultsKey,JSON.stringify(resultState));}
+function resetScope(profile){
+ let record={};try{record=JSON.parse(localStorage.getItem(activeAttendanceKey)||'{}')||{};}catch(e){}
+ state={...defaultState,rangeEnd:now(),...record,profile:{...defaultState.profile,...(record.profile||{})}};
+ let rs={};try{rs=JSON.parse(localStorage.getItem(activeResultsKey)||'{}')||{};}catch(e){}
+ resultState={records:[],lastSync:'',source:'',dobReady:false,...rs,records:Array.isArray(rs.records)?rs.records:[]};
+ if(profile)state.profile={...state.profile,...profile,program:profile.course||state.profile.program};
+ persist();
+}
+function consumeRoster(snapshot){
+ const items=Array.isArray(snapshot.students)?snapshot.students:[];
+ const person=snapshot.student||null,idx=Number(snapshot.selected);
+ const changed=person&&(rosterSelected!==idx||!rosterProfile||rosterProfile.roll!==person.roll);
+ if(changed){
+   const wasActive=rosterSelected>=0,roll=String(person.roll||'').trim();
+   const sameOld=!wasActive&&(String(state.profile.roll||'').trim()===roll)&&roll;
+   if(wasActive){persist();persistResults();}
+   activeAttendanceKey=STORE+':student:'+encodeURIComponent(roll);
+   activeResultsKey=EXAMS+':student:'+encodeURIComponent(roll);
+   if(sameOld&&!localStorage.getItem(activeAttendanceKey)){
+     localStorage.setItem(activeAttendanceKey,localStorage.getItem(STORE)||'{}');
+     localStorage.setItem(activeResultsKey,localStorage.getItem(EXAMS)||'{}');
+   }
+   resetScope(person);
+ }else if(person){
+   state.profile={...state.profile,...person,program:person.course||state.profile.program};
+ }
+ rosterStudents=items;rosterSelected=items.length&&idx>=0?idx:-1;rosterProfile=person;
+ rosterReady=true;
+ if(rosterSelected>=0)page='home';
+ render();
+}
+window.importStudentExcel=()=>{
+  rosterImportError='';rosterImportNote='Choose an Excel .xlsx file from your phone or Drive.';
+  renderRosterGate();
+  if(!native('importRoster'))window.onRosterImportError('Android file picker is not available.');
+};
+window.chooseStudent=()=>{const el=document.getElementById('activeStudent');if(!el)return;native('selectRosterStudent',Number(el.value));};
+window.onRosterLoaded=consumeRoster;
+window.onRosterImportStarted=()=>{rosterImporting=true;rosterImportError='';rosterImportNote='Reading and validating your workbook…';renderRosterGate();};
+window.onRosterImported=s=>{rosterImporting=false;rosterImportError='';rosterImportNote='';consumeRoster(s);toast(`Imported ${rosterStudents.length} student records successfully.`);};
+window.onRosterSelected=s=>{consumeRoster(s);toast('Active student updated. Authenticate this student before syncing ERP.');};
+window.onRosterImportError=reason=>{
+  rosterImporting=false;rosterImportNote='';
+  rosterImportError=String(reason||'The file could not be opened.').slice(0,600);
+  renderRosterGate();toast('Excel import failed: '+rosterImportError);
+};
+window.onRosterPickerCancelled=()=>{rosterImporting=false;rosterImportNote='';renderRosterGate();};
+function renderRosterGate(){
+ const gate=document.getElementById('rosterGate');if(!gate)return;
+ const show=!rosterReady||!rosterProfile;
+ gate.classList.toggle('hidden',!show);
+ if(!show)return;
+ const heads=['Name','University Roll No','Admission No',"Father’s Name",'Date of Birth','Year of Admission','Category','Course','Current Semester','Session','Correspondence Address (Parents)','Permanent Address (Parents)','Photo URL'];
+ gate.innerHTML=`<div class="roster-welcome"><div class="roster-mark">S+</div><span class="overline">STUDENT WORKSPACE · OFFLINE IMPORT</span><h2>${!rosterReady?'Loading your roster…':'Welcome to SIM+ Campus'}</h2><p>${!rosterReady?'Checking encrypted student records on this device.':'Import your student Excel once, then select a student. Your spreadsheet may include the 13 column headings or start directly with student records; column order must be preserved.'}</p>${rosterImportError?`<div class="roster-import-error" role="alert"><strong>Could not import your Excel</strong><p>${esc(rosterImportError)}</p><small>Your existing student data has not been changed. Correct the file and try again.</small></div>`:''}${rosterImportNote?`<div class="roster-import-note" role="status">${esc(rosterImportNote)}</div>`:''}${rosterReady?`<button class="action" onclick="importStudentExcel()" ${rosterImporting?'disabled aria-disabled="true"':''}>${rosterImporting?'Reading workbook…':rosterImportError?'Select another Excel (.xlsx)':'Import Excel (.xlsx)'}</button><div class="roster-headings"><strong>13 columns in order</strong><p>${heads.map(esc).join(' · ')}</p></div><p class="tiny-line">Supports Excel .xlsx workbooks with or without a header row. Does not support the older .xls format. Student records remain encrypted on this device.</p>`:''}</div>`;
+}
+function renderStudentPicker(){
+ const banner=document.getElementById('studentBanner');if(!banner)return;
+ if(!rosterReady||!rosterProfile){banner.innerHTML='';return;}
+ const opts=rosterStudents.map(x=>`<option value="${x.index}" ${x.index===rosterSelected?'selected':''}>${esc(x.name)} · ${esc(x.roll)}</option>`).join('');
+ banner.innerHTML=`<div class="roster-toolbar"><div><span class="overline">ACTIVE STUDENT</span><div class="roster-selector"><select id="activeStudent" aria-label="Select student" onchange="chooseStudent()">${opts}</select></div></div><button class="action ghost small" onclick="importStudentExcel()">Replace Excel</button></div>`;
+}
+
+function toast(message){const t=document.getElementById('toast');t.textContent=String(message);t.classList.remove('hidden');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>t.classList.add('hidden'),4100);}
+function button(label,func='syncAttendance()',type='primary',extra=''){return `<button class="action ${type}" ${extra} onclick="${func}">${label}</button>`;}
+function empty(iconSymbol,title,subtitle,btnText,fn){return `<div class="empty-state"><span class="empty-symbol">${iconSymbol}</span><h3>${esc(title)}</h3><p>${esc(subtitle)}</p>${btnText?button(esc(btnText),fn):''}</div>`;}
+function num(n){return Number(n||0).toLocaleString('en-IN');}
+function color(n){return n>=state.target?'good':n>=state.target-10?'warning':'bad';}
+function stats(){const totals=E.summary(state.subjects);const from=E.fromRecords(state.records);const parsed=E.summary(from);const use=totals.total?totals:parsed;return {present:use.present,total:use.total,analysis:use.total?E.predict(use.present,use.total,state.target):null};}
+function officialPct(){if(Number.isFinite(Number(state.semesterPct))&&state.semesterPct!==null)return Number(state.semesterPct);const s=stats();return s.analysis?s.analysis.pct:null;}
+function displayPcts(){if(state.subjectPcts&&state.subjectPcts.length)return state.subjectPcts.map(s=>({name:s.name,pct:s.pct,source:'ERP percentage'}));return state.subjects.filter(s=>s.total>0).map(s=>({name:s.name,pct:s.present/s.total*100,present:s.present,total:s.total,source:'Fetched lecture records'}));}
+function dataNote(){return state.semesterPct!==null?'Official ERP semester percentage':state.windows.length&&state.windows.every(w=>w.done)?'Calculated from synchronized lecture records':'From saved lectures — may be incomplete';}
+function donut(value,label){const v=Number.isFinite(value)?Math.max(0,Math.min(100,value)):0,arc=(v*339.292/100).toFixed(2);return `<div class="donut"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="54" fill="none" stroke="currentColor" opacity=".08" stroke-width="8"/><circle cx="60" cy="60" r="54" fill="none" stroke="#7777ed" stroke-width="8" stroke-linecap="round" stroke-dasharray="${arc} 339.292"/></svg><div class="inside"><strong>${pct(value)}</strong><small>${esc(label)}</small></div></div>`;}
+function renderNav(){const nav=[['home','Overview'],['attendance','Attendance'],['results','Results'],['profile','Profile']];let content=nav.map(([id,label])=>`<button class="nav-link ${page===id?'active':''}" onclick="navigate('${id}')">${icon(id)}${label}</button>`).join('');document.getElementById('desktopNav').innerHTML=content;document.getElementById('mobileNav').innerHTML=nav.map(([id,label])=>`<button class="${page===id?'active':''}" onclick="navigate('${id}')">${icon(id)}<span>${label}</span></button>`).join('');}
+function render(){document.body.classList.toggle('darkmode',state.dark);renderNav();const [title,subtitle]=PAGES[page];document.getElementById('pageTitle').textContent=title;document.getElementById('pageSubtitle').textContent=subtitle;document.getElementById('themeToggle').textContent=state.dark?'☀':'◐';document.getElementById('content').innerHTML=({home:homeView,attendance:attendanceView,results:resultsView,profile:profileView})[page]();renderStudentPicker();renderRosterGate();}
+window.navigate=p=>{if(!PAGES[p])return;page=p;closeSheet();window.scrollTo(0,0);render();};
+window.toggleTheme=()=>{state.dark=!state.dark;persist();render();};
+function lastSyncLabel(){return state.lastSync?new Date(state.lastSync).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}):'Not synced yet';}
+function greeting(){const hour=new Date().getHours();return hour<12?'Good morning':hour<17?'Good afternoon':'Good evening';}
+function sourceCard(title,subtitle,action,fn,emoji){return `<button class="nav-card" onclick="${fn}"><span class="symbol">${emoji}</span><span style="flex:1"><strong>${esc(title)}</strong><small>${esc(subtitle)}</small></span><span class="arrow">›</span></button>`;}
+function homeView(){const o=officialPct(),subjects=displayPcts(),s=stats();const current=Number.isFinite(o),name=state.profile.name?.split(' ')[0]||'';
+return `<div class="stack">
+<div class="panel accent-panel"><div class="row between align-start"><div><div class="small" style="color:#ccd1ff;font-weight:700">${name?'HELLO, '+esc(name.toUpperCase()):'ATTENDANCE AT A GLANCE'}</div><div class="metric-big numbers" style="margin:17px 0 4px">${current?pct(o):'—'}</div><div class="small" style="color:#ccd1ff;margin:0 0 22px">Semester attendance · Target ${state.target}%</div></div><div style="font-size:38px;opacity:.4">✳</div></div><div class="meter light"><i style="width:${current?o:0}%"></i></div><div class="row between" style="margin-top:18px;position:relative"><span class="small" style="color:#e6e9ff">${esc(dataNote())}</span><button class="action small white" onclick="syncAttendance()">${icon('refresh')} Sync</button></div></div>
+<div class="grid g2"><div class="panel"><div class="quick-stat"><div><span>Subjects tracked</span><strong class="numbers">${subjects.length}</strong><div class="tiny-line">With retrieved attendance</div></div><div class="quick-icon">▦</div></div></div><div class="panel"><div class="quick-stat"><div><span>Results captured</span><strong class="numbers">${resultState.records.length}</strong><div class="tiny-line">From official result pages</div></div><div class="quick-icon">▤</div></div></div></div>
+<div class="section"><div class="section-top"><h2 class="section-title">Quick access</h2></div><div class="grid g2">${sourceCard('Attendance insights','Subjects, history and predictor','attendance',"navigate('attendance')",'◎')}${sourceCard('Exam results','College SIM + AKTU One View','results',"navigate('results')",'▤')}</div></div>
+<div class="section"><div class="section-top"><h2 class="section-title">Your subjects</h2><button class="action small ghost" onclick="navigate('attendance');setAttTab('subjects')">See all ›</button></div><div class="panel">${subjects.length?subjects.slice(0,4).map(subjectRow).join(''):empty('◎','No attendance synced','Sign in to SIM ERP and fetch real attendance to see your subjects.','Sync now','syncAttendance()')}</div></div>
+<div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><div class="bold">Last attendance refresh</div><div class="subtle small" style="margin-top:5px">${lastSyncLabel()}</div></div>${button('Open SIM ERP','openCollege()','small')}</div>
+</div>`;}
+function subjectRow(s){const n=Number(s.pct),cls=color(n);return `<div class="subject-item"><div><h3>${safeSubject(s.name)}</h3><small>${s.total!=null?`${s.present}/${s.total} classes marked`:'Official attendance percentage'}</small><div class="meter ${cls==='good'?'teal':cls==='bad'?'red':''}"><i style="width:${Math.max(0,Math.min(100,n))}%"></i></div></div><div><div class="pct numbers">${pct(n)}</div><div style="text-align:right;margin-top:5px"><span class="badge ${cls}">${n>=state.target?'On track':'Below target'}</span></div></div></div>`;}
+function dailyChart(){const days=[];for(let d=13;d>=0;d--){const x=new Date();x.setHours(12,0,0,0);x.setDate(x.getDate()-d);const id=E.iso(x);const rows=state.records.filter(r=>r.date===id&&['P','A'].includes(r.status));const present=rows.filter(r=>r.status==='P').length,ratio=rows.length?present/rows.length:0;days.push(`<div class="heatcell ${!rows.length?'':ratio>=.75?'good':ratio>=.5?'mid':'bad'}" title="${id}: ${present}/${rows.length}" aria-label="${id}: ${present} present of ${rows.length}"></div>`);}return `<div class="heatmap">${days.join('')}</div><div class="heatmap-caption"><span>Last 14 days · blank = no marked classes</span><span>Today</span></div>`;}
+function attendanceView(){const options=['subjects','daily','predictor','sync'];return `<div class="stack"><div class="segmented" role="tablist">${options.map(x=>`<button class="${attTab===x?'active':''}" onclick="setAttTab('${x}')">${{subjects:'Subjects',daily:'Daily',predictor:'Predictor',sync:'Sync'}[x]}</button>`).join('')}</div>${({subjects:subjectAttendance,daily:dailyAttendance,predictor:predictionAttendance,sync:syncAttendanceView})[attTab]()}</div>`;}
+window.setAttTab=x=>{attTab=x;render();};
+function subjectAttendance(){const items=displayPcts(),o=officialPct();return `<div class="panel"><div class="row between wrap"><div><div class="overline">CURRENT SEMESTER</div><h2 class="panel-title" style="margin:8px 0 6px">Overall attendance</h2><div class="subtle small">${esc(dataNote())}</div></div>${donut(o,'of lectures')}</div><div class="grid g2" style="margin-top:14px"><div class="course-info"><span>Target</span><strong>${state.target}%</strong></div><div class="course-info"><span>Last synced</span><strong>${lastSyncLabel()}</strong></div></div></div><div class="panel"><div class="section-top"><h2 class="section-title">Subject breakdown</h2><span class="badge purple">${items.length} subjects</span></div>${items.length?items.map(subjectRow).join(''):empty('▦','No subject data','Sync from the official ERP to populate this list.','Fetch attendance','syncAttendance()')}</div><div class="panel"><div class="section-top"><h2 class="section-title">Recent attendance pattern</h2></div>${dailyChart()}<p class="subtle small">Each square represents a day with available P/A lecture records.</p></div>`;}
+function dailyAttendance(){let rows=state.records.filter(r=>!state.start||r.date>=state.start).filter(r=>r.date<=(state.rangeEnd||now()));if(historyFilter!=='all')rows=rows.filter(r=>r.status===historyFilter);const days={};for(const r of rows) {if(!days[r.date])days[r.date]=[];days[r.date].push(r);}const sorted=Object.keys(days).sort().reverse();return `<div class="panel"><div class="section-top"><h2 class="section-title">Lecture history</h2><span class="badge purple">${rows.length} entries</span></div><div class="row between wrap" style="margin-bottom:17px"><div class="segmented"><button class="${historyFilter==='all'?'active':''}" onclick="setHistoryFilter('all')">All</button><button class="${historyFilter==='P'?'active':''}" onclick="setHistoryFilter('P')">Present</button><button class="${historyFilter==='A'?'active':''}" onclick="setHistoryFilter('A')">Absent</button></div>${button('Today on ERP','openToday()','small')}</div>${sorted.length?sorted.slice(0,90).map(date=>`<div class="timeline-day"><header><strong>${shortDay(date)}</strong><span class="badge">${days[date].filter(r=>r.status==='P').length}/${days[date].filter(r=>['P','A'].includes(r.status)).length} present</span></header>${days[date].map(r=>`<div class="class-card"><div class="class-dot ${r.status}"></div><div class="detail"><strong>${safeSubject(r.subject)}</strong><small>${esc(r.slot||'Lecture slot')}</small></div><span class="status ${r.status}">${r.status==='P'?'Present':r.status==='A'?'Absent':'Not marked'}</span></div>`).join('')}</div>`).join(''):empty('◷','Nothing here yet','Daily records appear after fetching date-wise attendance from SIM.','Sync history','setAttTab(\'sync\')')}</div>`;}
+window.setHistoryFilter=x=>{historyFilter=x;render();};
+function predictionAttendance(){const s=stats();const p=s.analysis,official=officialPct();const canPredict=p&&s.total>0&&(!state.windows.length||state.windows.every(w=>w.done));return `<div class="panel"><div class="row between"><h2 class="section-title">Attendance predictor</h2><span class="badge purple">${state.target}% goal</span></div><p class="subtle small" style="line-height:1.6">Based only on complete, individually marked P/A lecture records, not percentages. Official rules may differ.</p>${canPredict?`<div class="grid g2" style="margin-top:18px"><div class="course-info"><span>Extra classes you can miss</span><strong style="font-size:29px">${num(p.bunk)}</strong></div><div class="course-info"><span>Classes to attend consecutively</span><strong style="font-size:29px">${p.need===null?'Not attainable at 100%':num(p.need)}</strong></div></div><div class="info-box" style="margin-top:14px">Computed from ${num(s.present)} present / ${num(s.total)} marked classes. ${state.semesterPct!==null?'Official ERP percentage: '+pct(official)+'.':''} Verify that all semester date windows have been retrieved.</div>`:empty('◎','Prediction needs complete class counts','SIM reports percentages in some views. Sync the full Date Wise attendance first; no class counts are invented.','Fetch semester','setAttTab(\'sync\')')}</div><div class="panel"><h2 class="section-title">Target control</h2><div class="fields" style="margin-top:14px"><label class="field">Minimum attendance (%)<input id="newTarget" type="number" min="1" max="100" value="${state.target}"></label><div class="center">${button('Save target','saveTarget()')}</div></div></div>`;}
+window.saveTarget=()=>{const v=Number(document.getElementById('newTarget')?.value);if(!Number.isFinite(v)||v<1||v>100)return toast('Target must be 1–100%.');state.target=v;persist();render();toast('Target saved');};
+function syncAttendanceView(){const windows=state.windows||[],completed=windows.filter(w=>w.done).length;return `<div class="panel"><h2 class="section-title">Auto-sync real attendance</h2><p class="subtle small" style="line-height:1.6">Log into the original SIM website once. The app requests each supported 30-day window, reads returned lecture rows, and keeps your session on this device.</p><div class="fields" style="margin:17px 0"><label class="field">From <input type="date" id="attendanceFrom" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">To <input type="date" id="attendanceTo" value="${esc(state.rangeEnd||now())}" max="${now()}"></label></div><div class="actions">${button(icon('refresh')+' Start full sync','syncAttendance()')}${button('Open college ERP','openCollege()','ghost')}</div>${windows.length?`<div class="info-box" style="margin-top:16px">${completed}/${windows.length} date windows completed. Missing windows are not counted as fetched data.</div>`:''}</div><div class="panel"><h2 class="section-title">Import details</h2><div class="list"><div class="list-item"><div><strong>Last ERP refresh</strong><div class="meta">Actual records only</div></div><div class="right">${lastSyncLabel()}</div></div><div class="list-item"><div><strong>Fetched lecture entries</strong><div class="meta">P / A / NM</div></div><div class="right numbers">${state.records.length}</div></div><div class="list-item"><div><strong>30-day intervals</strong><div class="meta">Most recent requested range</div></div><div class="right numbers">${completed}/${windows.length}</div></div></div></div>`;}
+window.syncAttendance=()=>{let f=document.getElementById('attendanceFrom')?.value||state.start,t=document.getElementById('attendanceTo')?.value||state.rangeEnd||now();if(!f||f>t||t>now())return toast('Set a valid semester date range in Profile first.');let parts;try{parts=E.rangeParts(f,t);}catch(e){return toast(e.message);}const old=state.windows||[];state.windows=parts.map(p=>({...p,done:!!old.find(w=>w.from===p.from&&w.to===p.to&&w.done)}));state.rangeEnd=t;persist();if(native('startAutoSync',f,t)){document.getElementById('syncBanner').classList.remove('hidden');document.getElementById('syncMessage').textContent='Starting college ERP sync…';}else toast('Auto-sync is only available in the Android app.');};
+window.cancelSync=()=>{native('stopAutoSync');document.getElementById('syncBanner').classList.add('hidden');};
+window.openToday=()=>native('showToday');
+window.openCollege=()=>native('showErp');
+window.openCollegeResult=()=>{if(!native('openCollegeResult'))toast('Update the Android app to use result capture.');};
+window.openCourse=()=>{if(!native('openCourse'))toast('Update the Android app for Course profile sync.');};
+window.openAktu=()=>{const roll=state.profile.roll||'';if(!native('openAktu',roll))toast('Update the Android app to open AKTU.');};
+window.scanCollegeResults=()=>{if(!native('scanCollegeResults'))toast('Result scanning requires the updated Android app.');};
+window.captureResult=()=>{if(!native('captureCurrentResult'))toast('Result capture requires the updated Android app.');};
+window.captureProfile=()=>{if(!native('captureStudentProfile'))toast('Profile capture requires the updated Android app.');};
+window.prepareAktu=()=>{if(!native('prefillAktu',state.profile.roll||''))toast('Open AKTU first.');};
+function sourceName(src){return src==='aktu'?'AKTU One View':'College SIM';}
+function uniqueSubjects(records){const set=new Set();for(const r of records)for(const x of (r.subjects||[]))set.add(String(x.code||x.name||'').toLowerCase());return set.size;}
+function semRecords(source,sem){return resultState.records.filter(r=>r.source===source&&String(r.semester||'Semester unavailable')===sem);}
+function resultSummaryCard(recs,sem){
+ const isAktu=recs[0]?.source==='aktu';
+ const sgpa=recs.map(x=>x.sgpa).find(v=>v!==''&&v!=null),cgpa=recs.map(x=>x.cgpa).find(Boolean),total=recs.map(x=>x.marksTotal).find(Boolean);
+ const status=recs.map(x=>x.status).find(Boolean),subjects=uniqueSubjects(recs),count=recs.reduce((n,r)=>n+(r.subjects||[]).length,0);
+ const types=[...new Set(recs.flatMap(x=>(x.subjects||[]).map(s=>s.examType).filter(Boolean)))];
+ return `<article class="result-sem-card result-sem-modern" aria-label="${esc(sem)}">
+  <div class="result-sem-head"><div><span class="overline">${isAktu?'AKTU UNIVERSITY':'SIM INTERNAL ASSESSMENTS'}</span><h3>${esc(sem)}</h3><p>${subjects} subject${subjects===1?'':'s'} · ${count} verified entr${count===1?'y':'ies'}</p></div>
+  ${isAktu?`<div class="sgpa-highlight"><span>SGPA</span><strong>${esc(sgpa||'—')}</strong></div>`:`<div class="semester-icon">▤</div>`}</div>
+  <div class="semester-pill-row">${status?`<span class="semester-pill status">${esc(status)}</span>`:''}${cgpa?`<span class="semester-pill">CGPA ${esc(cgpa)}</span>`:''}${total?`<span class="semester-pill">${esc(total)} marks</span>`:''}${types.slice(0,3).map(t=>`<span class="semester-pill">${esc(t)}</span>`).join('')}</div>
+  <button class="result-open" onclick="showSemester('${encodeURIComponent(sem)}')">Explore subjects & marks <span aria-hidden="true">→</span></button>
+ </article>`;
+}
+function semesterCards(records){const groups=new Map();for(const r of records){const key=String(r.semester||'Semester unavailable');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r);}return [...groups].sort((a,b)=>b[0].localeCompare(a[0],undefined,{numeric:true})).map(([sem,list])=>resultSummaryCard(list,sem)).join('');}
+function examEntry(r){const rows=r.subjects||[];const types=[...new Set(rows.map(s=>s.examType).filter(Boolean))];return `<div class="result-exam-entry"><div><strong>${esc(r.exam||'Exam result')}</strong><small>${esc(r.session||'')}${rows.length?' · '+rows.length+' assessment entries':''}${types.length?' · '+types.slice(0,3).map(esc).join(', '):''}</small></div>${button('View details',`showExam('${encodeURIComponent(r.id)}')`,'small')}</div>`;}
+function semesterSubjectView(matches){
+ const source=matches[0]?.source||'college';
+ const rows=matches.flatMap(r=>(r.subjects||[]).map(s=>({...s,exam:r.exam,semester:r.semester})));
+ if(!rows.length)return '<div class="info-box">The official portal did not provide subject-level marks for this result.</div>';
+ if(source==='aktu')return `<div class="subject-list">${rows.map(s=>`<div class="subject-search-item" data-search="${esc([s.name,s.code,s.subjectType].join(' ').toLowerCase())}">${resultSubjectCard(s,source)}</div>`).join('')}</div>`;
+ const groups=new Map();for(const item of rows){const key=String(item.code||item.name).toLowerCase();if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
+ return `<div class="subject-list">${[...groups.values()].map(items=>{
+   const s=items[0];return `<article class="college-subject-group subject-search-item" data-search="${esc([s.name,s.code,...items.map(x=>x.examType)].join(' ').toLowerCase())}">
+    <div class="subject-group-title"><div><h4>${esc(s.name||s.code||'Subject')}</h4><p>${esc(s.code||'')} · ${items.length} exam entr${items.length===1?'y':'ies'}</p></div></div>
+    <div class="assessment-grid">${items.map(it=>{
+      const n=Number(it.marks),max=Number(it.maxMarks),good=Number.isFinite(n)&&Number.isFinite(max)&&max>0;
+      const v=good?Math.min(100,Math.max(0,100*n/max)):null;
+      return `<div class="assessment-card"><div class="assessment-heading">${esc(it.examType||it.exam||'Assessment')}</div>
+       <div class="assessment-score"><strong>${esc(it.marks||'—')}</strong><span>${esc(it.maxMarks?'/ '+it.maxMarks:'marks')}</span></div>
+       ${v!==null?`<div class="marks-progress"><div style="width:${v}%"></div></div>`:''}
+       <div class="assessment-footer">${esc([it.examMonth,it.marksType].filter(Boolean).join(' · '))}</div></div>`;
+    }).join('')}</div>
+  </article>`;}).join('')}</div>`;
+}
+window.filterResultSubjects=value=>{const q=String(value||'').trim().toLowerCase();for(const el of document.querySelectorAll('.subject-search-item'))el.hidden=!!q&&!(el.getAttribute('data-search')||'').includes(q);};
+window.showSemester=encoded=>{
+ const sem=decodeURIComponent(encoded),matches=semRecords(examTab,sem);if(!matches.length)return;
+ const sgpa=matches.map(r=>r.sgpa).find(Boolean),cgpa=matches.map(r=>r.cgpa).find(Boolean),result=matches.map(r=>r.status).find(Boolean);
+ const sum=matches.map(r=>r.marksTotal).find(Boolean),date=matches.map(r=>r.resultDate).find(Boolean);
+ const isAktu=examTab==='aktu',n=uniqueSubjects(matches);
+ showSheet(`<div class="result-sheet academic-sheet"><div class="sheet-topline"><span class="overline">${esc(sourceName(examTab))} · AUTHENTIC RECORDS</span><button class="sheet-dismiss" onclick="closeSheet()" aria-label="Close">✕</button></div>
+ <div class="academic-sheet-hero"><span class="overline">ACADEMIC SCORECARD</span><h2>${esc(sem)}</h2><p>${n} subjects ${sum?' · '+esc(sum)+' marks':''}${date?' · Declared '+esc(date):''}</p>
+ ${isAktu?`<div class="headline-sgpa"><span>SEMESTER GRADE POINT AVERAGE</span><strong>${esc(sgpa||'—')}</strong><small>${esc(result||'Official AKTU scorecard')}${cgpa?' · CGPA '+esc(cgpa):''}</small></div>`:''}</div>
+ <div class="result-summary-pills">${[result?['Result',result]:null,cgpa?['CGPA',cgpa]:null,sum?['Marks',sum]:null].filter(Boolean).map(([a,b])=>`<div><span>${esc(a)}</span><strong>${esc(b)}</strong></div>`).join('')}</div>
+ <div class="subject-search"><span aria-hidden="true">⌕</span><input aria-label="Search subjects" placeholder="Find subject or exam…" oninput="filterResultSubjects(this.value)"></div>
+ ${semesterSubjectView(matches)}
+ <div class="actions" style="margin-top:18px">${button('Save compact PDF','downloadReport()')}</div>
+ <p class="result-hint">Missing values are shown as —. Grades and marks are taken from the original result page, not estimated.</p></div>`);
+};
+function resultsView(){const matching=resultState.records.filter(x=>x.source===examTab),semesters=new Set(matching.map(x=>x.semester||'Semester unavailable'));
+ const selected=examTab==='aktu';
+ return `<div class="stack result-workspace">
+ <div class="result-switch" role="tablist" aria-label="Result source"><button role="tab" aria-selected="${!selected}" class="${!selected?'current':''}" onclick="setExamTab('college')">▤ College SIM</button><button role="tab" aria-selected="${selected}" class="${selected?'current':''}" onclick="setExamTab('aktu')">🎓 AKTU One View</button></div>
+ <div class="result-hero"><div><div class="overline">ACADEMIC RESULTS</div><h2>${selected?'University results':'College assessments'}</h2><p>${selected?'Semester-wise SGPA, internal/external marks and grades':'Sessional exams, subject scores and exam months'}</p></div><div class="result-hero-icon">${selected?'🎓':'▤'}</div></div>
+ <div class="result-count-grid"><div class="result-count"><span>Semesters saved</span><strong>${semesters.size}</strong></div><div class="result-count"><span>Subjects</span><strong>${uniqueSubjects(matching)}</strong></div><div class="result-count"><span>Result views</span><strong>${matching.length}</strong></div></div>
+ <div class="panel"><div class="section-top"><div><h2 class="section-title">Semester results</h2><p class="small subtle" style="margin:7px 0 0">${matching.length?'Tap a semester to explore every available subject':'Synced official results will appear here'}</p></div></div>
+ ${matching.length?`<div class="result-sem-list">${semesterCards(matching)}</div>`:empty('▤','No official results imported',selected?'Open AKTU, complete the university verification and tap View Result. SIM+ detects the published scorecard automatically.':'Log into SIM once; SIM+ selects each semester, leaves Exam Name unchanged and presses Show.','Open official portal',selected?'openAktu()':'openCollegeResult()')}
+ </div>
+ <div class="panel"><h2 class="section-title">${selected?'Retrieve AKTU results':'Retrieve SIM results'}</h2>
+ ${selected?`<div class="login-steps"><div><span>1</span><p>Roll number autofills on the initial AKTU screen.</p></div><div><span>2</span><p>Next, roll number and DOB autofill. Finish CAPTCHA, then tap <strong>View Result</strong>. The app reads the scorecard automatically.</p></div></div>`:
+ `<p class="small subtle" style="line-height:1.65">Selects each available semester and presses Show without changing Exam Name. All sessional rows are captured together; unreleased results stay empty.</p>`}
+ <div class="actions">${button(selected?'Open AKTU One View':'Scan available semesters',selected?'openAktu()':'scanCollegeResults()')}${button('Capture visible result','captureResult()','ghost')}${selected?button('Fill current login step','prepareAktu()','ghost'):button('Open SIM results','openCollegeResult()','ghost')}</div></div>
+ <div class="report-cover"><div class="overline">YOUR ACADEMIC TRANSCRIPT</div><h3>Candidate result report</h3><p>Complete student profile from your Excel, photo and consolidated university/college results. Missing results are labelled as unavailable.</p>${button('Export results PDF','downloadReport()')}</div>
+ <div class="info-box">SIM+ reads official result pages only. Complete CAPTCHA in the official browser; once AKTU shows the scorecard, the app captures it automatically. These results are not a substitute for official marksheets.</div></div>`;
+}
+window.setExamTab=x=>{if(!['college','aktu'].includes(x))return;examTab=x;render();};
+function resultSubjectCard(s,src){
+ const parts=[];const actual=s.marks!==undefined&&s.marks!==null?String(s.marks):'';
+ if(src==='aktu'){
+  if(s.internal!==undefined&&s.internal!=='')parts.push(['Internal',s.internal]);
+  if(s.external!==undefined&&s.external!=='')parts.push(['External',s.external]);
+  if(s.backPaper&&s.backPaper!=='--')parts.push(['Back paper',s.backPaper]);
+  if(s.credits)parts.push(['Credits',s.credits]);
+ }else{
+  if(actual)parts.push(['Obtained',actual]);
+  if(s.maxMarks)parts.push(['Maximum',s.maxMarks]);
+  if(s.minMarks)parts.push(['Minimum',s.minMarks]);
+ }
+ const amount=(src==='college'&&Number.isFinite(Number(actual))&&Number.isFinite(Number(s.maxMarks))&&Number(s.maxMarks)>0)?Math.max(0,Math.min(100,(Number(actual)/Number(s.maxMarks))*100)):null;
+ return `<article class="subject-result-card"><div class="subject-result-header"><div><h4>${esc(s.name||s.code||'Subject')}</h4><p>${esc([s.code,s.subjectType,s.examType,s.examMonth].filter(Boolean).join(' · ')||'Official result entry')}</p></div>${s.grade?`<span class="grade-bubble">${esc(s.grade)}</span>`:''}</div>
+ <div class="result-values">${parts.map(([k,v])=>`<div><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}${s.result?`<div><span>Result</span><strong>${esc(s.result)}</strong></div>`:''}</div>
+ ${amount!==null?`<div class="marks-progress"><div style="width:${amount}%"></div></div>`:''}</article>`;
+}
+window.showExam=encoded=>{const id=decodeURIComponent(encoded),r=resultState.records.find(x=>x.id===id);if(!r)return;
+ const grouped=new Map();for(const s of (r.subjects||[])){const key=r.source==='aktu'?'University subjects':s.examType||'Other assessment';if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(s);}
+ const summary=[['SGPA',r.sgpa],['CGPA',r.cgpa],['Total marks',r.marksTotal],['Result',r.status],['Declared',r.resultDate]].filter(x=>x[1]);
+ const blocks=[...grouped].map(([name,arr])=>`<section class="result-subject-group"><h3>${esc(name)} <small>${arr.length} subject${arr.length===1?'':'s'}</small></h3>${arr.map(s=>resultSubjectCard(s,r.source)).join('')}</section>`).join('');
+ showSheet(`<div class="result-sheet"><div class="sheet-topline"><span class="overline">${esc(sourceName(r.source))} · ${esc(r.session||'')}</span><button class="sheet-dismiss" onclick="closeSheet()" aria-label="Close">✕</button></div><h2>${esc(r.semester||'Semester results')}</h2><p>${esc(r.exam||'Published examination records')}</p>${summary.length?`<div class="result-detail-stats">${summary.map(([k,v])=>`<div><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}</div>`:''}${blocks||'<div class="info-box">No subject-level marks were included in this captured summary.</div>'}<div class="actions" style="margin-top:20px">${button('Export academic PDF','downloadReport()')}</div></div>`);
+};
+function reportData(){return {candidate:{name:state.profile.name||'',father:state.profile.father||'',roll:state.profile.roll||'',program:state.profile.program||'',semester:state.profile.semester||'',college:state.profile.college||'',session:state.profile.session||'',admission:state.profile.admission||'',dob:state.profile.dob||'',admissionYear:state.profile.admissionYear||'',category:state.profile.category||'',correspondenceAddress:state.profile.correspondenceAddress||'',permanentAddress:state.profile.permanentAddress||'',photoUrl:state.profile.photoUrl||''},generatedAt:new Date().toISOString(),results:resultState.records.map(r=>({source:r.source,semester:r.semester,exam:r.exam,session:r.session,sgpa:r.sgpa,cgpa:r.cgpa,status:r.status,marksTotal:r.marksTotal,resultDate:r.resultDate,subjects:(r.subjects||[]).map(s=>({code:s.code,name:s.name,marks:s.marks,grade:s.grade,credits:s.credits,total:s.total,result:s.result,examType:s.examType,examMonth:s.examMonth,marksType:s.marksType,minMarks:s.minMarks,maxMarks:s.maxMarks,internal:s.internal,external:s.external,backPaper:s.backPaper,subjectType:s.subjectType}))}))};}
+window.downloadReport=()=>{if(!rosterProfile)return toast('Import an Excel and select a student before exporting.');const raw=JSON.stringify(reportData());if(!native('exportCandidateReport',raw))toast('PDF export requires the updated Android app.');};
+function profileView(){const p=state.profile;
+const items=[['Full name',p.name],['University roll no.',p.roll],['Admission no.',p.admission],['Father’s name',p.father],['Date of birth',p.dob],['Year of admission',p.admissionYear],['Category',p.category],['Course',p.course||p.program],['Current semester',p.semester],['Session',p.session],['Correspondence address (parents)',p.correspondenceAddress],['Permanent address (parents)',p.permanentAddress],['Photo URL',p.photoUrl]];
+const photo=String(p.photoUrl||'');let safePhoto='';try{const url=new URL(photo);if(url.protocol==='https:')safePhoto=url.href;}catch(e){}
+return `<div class="stack"><div class="panel"><div class="row align-start" style="gap:16px;margin-bottom:18px"><div class="roster-avatar">${safePhoto?`<img src="${esc(safePhoto)}" alt="Student portrait" loading="lazy" onerror="this.remove()">`:esc((p.name||'S')[0])}</div><div><h2 style="margin:0 0 6px">${esc(p.name||'Student profile')}</h2><div class="subtle small">${esc(p.roll||'No roll number')}</div><div class="badge" style="margin-top:8px">${esc(p.semester||'Semester not set')}</div></div></div><div class="course-grid">${items.map(([label,val])=>`<div class="course-info"><span>${esc(label)}</span><strong>${esc(val||'Not supplied')}</strong></div>`).join('')}</div><div class="actions" style="margin-top:20px">${button('Generate comprehensive PDF','downloadReport()')}${button('Re-import Excel','importStudentExcel()','ghost')}</div><div class="tiny-line">Student details come from your encrypted Excel roster. Photo loading contacts its host only when displayed or exported. SIM/AKTU marks are captured separately from official authenticated pages.</div></div><div class="panel"><h2 class="section-title">Attendance preferences</h2><div class="fields" style="margin:17px 0"><label class="field">Semester start<input type="date" id="semesterStart" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">Attendance target (%)<input type="number" id="goalTarget" min="1" max="100" value="${state.target}"></label></div>${button('Save preferences','savePreferences()')}</div><div class="panel"><h2 class="section-title">Official academic portals</h2><p class="tiny-line">Selecting a different student does not log into their ERP account. Use their own authorized SIM login and CAPTCHA. AKTU roll and DOB are prepared from the selected roster row.</p><div class="actions">${button('SIM ERP login','openCollege()')}${button('AKTU One View','openAktu()','ghost')}</div><div class="actions" style="margin-top:15px">${button('Export attendance backup','backupLocal()','ghost')}${button('Restore old backup','restoreLocal()','ghost')}${button('Clear cached results','clearResults()','ghost')}</div></div></div>`;}
+window.savePreferences=()=>{const s=document.getElementById('semesterStart').value,t=Number(document.getElementById('goalTarget').value);if(!s||s>now()||!Number.isFinite(t)||t<1||t>100)return toast('Set a valid semester start date and a 1–100% target.');state.start=s;state.target=t;state.setup=true;persist();render();toast('Preferences saved');};
+window.backupLocal=()=>{const raw=JSON.stringify({...state,format:'SIM+1'},null,2);if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(raw).then(()=>toast('Backup copied to clipboard')).catch(()=>prompt('Copy this local backup:',raw));else prompt('Copy this local backup:',raw);};
+window.restoreLocal=()=>{const raw=prompt('Paste the SIM+ attendance JSON from your previous app:');if(!raw)return;try{const obj=JSON.parse(raw);if(obj.format!=='SIM+1'||!Array.isArray(obj.records)||!Array.isArray(obj.subjects))throw Error();if(!confirm('Replace this app’s attendance cache with the backup? Exam results remain unchanged.'))return;for(const k of ['start','target','setup','dark','subjects','records','windows','lastSync','lastReport','selectedSubject','rangeEnd','semesterPct','monthly','subjectPcts'])if(Object.hasOwn(obj,k))state[k]=obj[k];persist();render();toast('Previous SIM+ attendance restored');}catch(e){toast('Unrecognized SIM+ backup');}};
+window.clearResults=()=>{if(!confirm('Remove all locally saved exam results?'))return;resultState.records=[];resultState.lastSync='';persistResults();render();toast('Saved results cleared');};
+window.clearAttendance=()=>{if(!confirm('Remove attendance records and synchronization history?'))return;state.records=[];state.subjects=[];state.subjectPcts=[];state.semesterPct=null;state.monthly=[];state.windows=[];state.lastSync='';persist();render();toast('Attendance cache cleared');};
+function showSheet(html){document.getElementById('sheetBody').innerHTML=html;document.getElementById('modalBackdrop').classList.remove('hidden');modalOpen=true;}
+window.closeSheet=ev=>{if(ev&&ev.target!==document.getElementById('modalBackdrop'))return;document.getElementById('modalBackdrop').classList.add('hidden');modalOpen=false;};
+window.onSyncStatus=obj=>{const running=!obj.done;const bar=document.getElementById('syncBanner');bar.classList.toggle('hidden',!running);document.getElementById('syncMessage').textContent=obj.message||'Sync in progress';if(obj.done){toast(obj.message||'Sync finished');render();}};
+window.receiveAutoWindow=(from,to,raw)=>{try{const d=E.parseSnapshot(raw);const valid=d.records.filter(r=>r.date>=from&&r.date<=to&&['P','A','NM'].includes(r.status));const map=new Map(state.records.map(r=>[r.key,r]));valid.forEach(r=>map.set(r.key,{...r,source:'erp-auto'}));state.records=[...map.values()].sort((a,b)=>a.date.localeCompare(b.date));state.subjects=E.fromRecords(state.records);const w=state.windows.find(w=>w.from===from&&w.to===to);if(w)w.done=true;state.lastSync=new Date().toISOString();persist();render();}catch(e){toast('Unable to parse ERP history. No data added.');}};
+window.receiveErpSnapshot=raw=>{try{const d=E.parseSnapshot(raw);let fetched=false;const map=new Map(state.records.map(r=>[r.key,r]));d.records.forEach(r=>{map.set(r.key,r);fetched=true;});state.records=[...map.values()];if(d.subjects.length){state.subjects=d.subjects;fetched=true;}else if(d.records.length)state.subjects=E.fromRecords(state.records);if(d.percentages.length){state.subjectPcts=d.percentages;fetched=true;}if(d.semesterPct!==null){state.semesterPct=d.semesterPct;fetched=true;}if(d.months.length)state.monthly=d.months;if(!fetched)return toast('No recognized ERP attendance records found');state.lastSync=new Date().toISOString();persist();render();toast('Attendance captured from official ERP');}catch(e){toast('ERP attendance table was not recognized');}};
+window.receiveExamSnapshot=(source,raw)=>{try{const snap=typeof raw==='string'?JSON.parse(raw):raw;const parsed=X.parseSnapshot(snap,source);
+ const identity=snap.profile||{};let identityChanged=false;
+ if(rosterProfile&&identity.roll){
+   const normRoll=x=>String(x||'').replace(/\D/g,'');
+   if(normRoll(identity.roll)&&normRoll(rosterProfile.roll)!==normRoll(identity.roll)){
+     toast('ERP result belongs to a different student. Sign in with the selected student’s account.');return;
+   }
+ }
+
+ if(source==='college'&&!rosterProfile){for(const k of ['name','father','roll','program','admission'])if(typeof identity[k]==='string'&&identity[k].trim()){state.profile[k]=identity[k].trim().slice(0,110);identityChanged=true;}}
+ if(identityChanged)persist();
+ if(!parsed.results.length){if(identityChanged)render();return;}
+ const byId=new Map(resultState.records.map(r=>[r.id,r]));
+ for(const r of parsed.results){const previous=byId.get(r.id);if(previous&&previous.subjects?.length){const key=s=>[s.code||s.name,s.examType,s.marksType,s.examMonth].map(x=>String(x||'').toLowerCase()).join('|');const existing=new Map(previous.subjects.map(s=>[key(s),s]));r.subjects.forEach(s=>existing.set(key(s),s));r.subjects=[...existing.values()];}
+ byId.set(r.id,r);}
+ resultState.records=Array.from(byId.values()).sort((a,b)=>String(b.semester||'').localeCompare(a.semester||'',undefined,{numeric:true}));resultState.lastSync=new Date().toISOString();resultState.source=source;
+ persistResults();examTab=source;page='results';render();toast(`Imported ${parsed.results.length} official result record(s)`);
+ }catch(e){toast('Could not parse official result: '+String(e.message||e).slice(0,80));}};
+window.receiveStudentProfile=raw=>{try{const d=typeof raw==='string'?JSON.parse(raw):raw;
+if(rosterProfile&&d.roll&&String(d.roll).replace(/\D/g,'')!==String(rosterProfile.roll).replace(/\D/g,''))return toast('ERP is signed in as another student. Switch to the correct account.');
+if(rosterProfile)return toast('Excel profile retained. SIM authentication can be used for results.');
+const p=state.profile||{};for(const k of ['name','father','roll','program','semester','college','session','admission']){if(typeof d[k]==='string'&&d[k].trim())p[k]=d[k].trim().slice(0,100);}state.profile=p;persist();if('dobReady' in d){resultState.dobReady=!!d.dobReady;persistResults();}render();toast('Student details refreshed from SIM');}catch(e){toast('Could not read the student profile');}};
+window.onExamScanProgress=obj=>{const bar=document.getElementById('syncBanner');bar.classList.toggle('hidden',!!obj.done);document.getElementById('syncMessage').textContent=obj.message||'Reading available exams';if(obj.done){render();toast(obj.message||'Exam scan complete');}};
+render();
+})();
