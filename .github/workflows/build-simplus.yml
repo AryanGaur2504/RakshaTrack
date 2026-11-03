@@ -25,6 +25,14 @@ jobs:
           gradle-version: '8.10.2'
       - name: Unpack SIM+ source
         run: base64 -d source.tar.xz.b64 | tar -xJf -
+      - name: Apply Java source compile fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("app/src/main/java/com/campus/simplus/AcademicFeatures.java")
+          s=p.read_text().replace("    }\n    /** Trigger from a user tap. Finds actual semester/exam controls, never assumes result availability. */", "    /** Trigger from a user tap. Finds actual semester/exam controls, never assumes result availability. */")
+          p.write_text(s)
+          PY
       - name: Check JavaScript
         run: |
           node --check app/src/main/assets/engine.js
