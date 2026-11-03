@@ -1,0 +1,39 @@
+name: Build SIM+ Campus v0.3
+on:
+  workflow_dispatch:
+  push:
+    branches: [simplus-v3-20261103]
+    paths: ['simplus-v3-source.tar.xz.b64', '.github/workflows/simplus-v3-build.yml']
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack SIM+ source
+        run: |
+          mkdir -p simplus-v3-project
+          base64 -d simplus-v3-source.tar.xz.b64 | tar -xJf - -C simplus-v3-project
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.10.2' }
+      - name: Unit tests
+        working-directory: simplus-v3-project
+        run: |
+          node --check app/src/main/assets/app.js
+          node --check app/src/main/assets/exam_engine.js
+          node tests/engine.test.js
+          node tests/exams.test.js
+      - name: Compile Android
+        working-directory: simplus-v3-project
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIMPlus-Campus-v0.3-APK
+          path: simplus-v3-project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
