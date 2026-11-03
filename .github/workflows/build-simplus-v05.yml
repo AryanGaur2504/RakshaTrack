@@ -1,0 +1,61 @@
+name: Build SIM+ Campus v0.5 Android
+on:
+  push:
+    branches: [simplus-v050-android-build]
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Unpack base and previous update
+        run: |
+          base64 -d source.tar.xz.b64 | tar -xJf -
+          cp -a v032_overlay/. .
+      - name: Apply SIM+ v0.5 source
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for i in range(4):
+              files=json.loads(Path(f'v05_json/source_{i}.json').read_text())
+              for name,data in files.items():
+                  p=Path(name)
+                  p.parent.mkdir(parents=True,exist_ok=True)
+                  p.write_text(data,encoding='utf-8')
+                  print('Updated',name)
+          PY
+      - name: Run parser tests
+        run: |
+          node --check app/src/main/assets/app.js
+          node --check app/src/main/assets/aktu_probe.js
+          node --check app/src/main/assets/exam_engine.js
+          node --check app/src/main/assets/result_bot.js
+          node --check app/src/main/assets/result_scan.js
+          node tests/engine.test.js
+          node tests/exams.test.js
+          node tests/semester-scan.test.js
+          node tests/aktu-real-shape.test.js
+          node tests/aktu-probe.test.js
+      - name: Build Android APK
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIMPlus-Campus-v0.5.0-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
