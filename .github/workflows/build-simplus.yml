@@ -23,26 +23,25 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Unpack SIM+ source
+      - name: Unpack original SIM+ source
         run: base64 -d source.tar.xz.b64 | tar -xJf -
-      - name: Apply Java source compile fix
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path("app/src/main/java/com/campus/simplus/AcademicFeatures.java")
-          s=p.read_text().replace("    }\n    /** Trigger from a user tap. Finds actual semester/exam controls, never assumes result availability. */", "    /** Trigger from a user tap. Finds actual semester/exam controls, never assumes result availability. */")
-          p.write_text(s)
-          PY
-      - name: Check JavaScript
+      - name: Apply complete SIM+ v0.3.2 upgrade
+        run: cp -a v032_overlay/. .
+      - name: Verify source syntax and tests
         run: |
           node --check app/src/main/assets/engine.js
           node --check app/src/main/assets/app.js
           node --check app/src/main/assets/erp_bot.js
+          node --check app/src/main/assets/exam_engine.js
+          node --check app/src/main/assets/result_scan.js
+          node --check app/src/main/assets/result_bot.js
+          node tests/engine.test.js
+          node tests/exams.test.js
       - name: Build installable debug APK
         run: gradle --no-daemon :app:assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SIMPlus-Android-APK
+          name: SIMPlus-Campus-v0.3.2-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
