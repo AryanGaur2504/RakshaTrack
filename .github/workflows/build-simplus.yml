@@ -27,6 +27,8 @@ jobs:
         run: base64 -d source.tar.xz.b64 | tar -xJf -
       - name: Apply complete SIM+ v0.3.2 upgrade
         run: cp -a v032_overlay/. .
+      - name: Apply SIM+ v0.4.0 results and report update
+        run: cp -a simplus-v4/. .
       - name: Verify source syntax and tests
         run: |
           node --check app/src/main/assets/engine.js
@@ -37,11 +39,12 @@ jobs:
           node --check app/src/main/assets/result_bot.js
           node tests/engine.test.js
           node tests/exams.test.js
+          node tests/aktu-real-shape.test.js
       - name: Build installable debug APK
         run: gradle --no-daemon :app:assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SIMPlus-Campus-v0.3.2-APK
+          name: SIMPlus-Campus-v0.4.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
