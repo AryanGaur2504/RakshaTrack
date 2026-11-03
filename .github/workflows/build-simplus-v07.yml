@@ -1,0 +1,61 @@
+name: Build SIM+ Campus v0.7 Android
+on:
+  push:
+    branches: [simplus-v070-android-build]
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Assemble SIM+ v0.7 source
+        run: |
+          base64 -d source.tar.xz.b64 | tar -xJf -
+          cp -a v032_overlay/. .
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for directory,prefix,count in [('v05_json','source_',4),('v06_json','batch_',2)]:
+              for i in range(count):
+                  for name,content in json.loads(Path(f'{directory}/{prefix}{i}.json').read_text()).items():
+                      target=Path(name)
+                      target.parent.mkdir(parents=True,exist_ok=True)
+                      target.write_text(content,encoding='utf-8')
+          PY
+          cp -a v06_overlay/. .
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for i in range(5):
+              for name,content in json.loads(Path(f'v07_json/source_{i}.json').read_text(encoding='utf-8')).items():
+                  target=Path(name)
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  target.write_text(content,encoding='utf-8')
+                  print('Updated',name)
+          PY
+      - name: Verify source tests
+        run: |
+          for f in app/src/main/assets/*.js; do node --check "$f"; done
+          for f in tests/*.js; do node "$f"; done
+      - name: Compile APK
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIMPlus-Campus-v0.7.0-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
