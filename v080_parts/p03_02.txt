@@ -1,0 +1,56 @@
+(650);
+     }
+     private void nextExam(String reason){scanExamIndex++;scanRetries=0;scanStage="choose-exam";scheduleScan(750);}
+-    void stopScan(String reason){scanning=false;scanPendingAfterLogin=false;scanBusy=false;scanToken++;scanRequestSerial++;scanStage="idle";emitStatus(reason,true);}
++    void stopScan(String reason){scanning=false;scanPendingAfterLogin=false;scanBusy=false;scanToken++;scanRequestSerial++;scanStage="idle";emitStatus(reason,true);
++        if(scanCompletion!=null){java.util.function.Consumer<String> callback=scanCompletion;scanCompletion=null;callback.accept(reason);}}
+     private void clearPhotoCache(){
+         photoCacheGeneration++;
+         if(cachedProfilePhoto!=null){cachedProfilePhoto.recycle();cachedProfilePhoto=null;}
+--- a/app/src/main/java/com/campus/simplus/CandidateReport.java
++++ b/app/src/main/java/com/campus/simplus/CandidateReport.java
+@@ -65,7 +65,7 @@
+         y+=41;rect(M,y,R,y+1,LINE);y+=14;
+     }
+     private void finish(){if(page==null)return;rect(M,808,R,809,LINE);
+-        write("AKTU: university  |  ST1 / ST2: sessionals  |  PUT: pre-university test",M,821,7.1f,MUTED,false);
++        write("AKTU: university  |  ST1/ST2: sessionals  |  PUT: pre-university test",M,821,7.1f,MUTED,false);
+         write("Page "+pageNum,R-37,821,7.1f,MUTED,false);doc.finishPage(page);page=null;
+     }
+     private void ensure(int height){if(page==null||y+height>MAXY)newPage();}
+@@ -131,7 +131,8 @@
+         pairValues("Current semester",get(p,"semester"),"Session",get(p,"session"));
+         multilineField("Correspondence address (parents)",get(p,"correspondenceAddress"),8.2f);
+         multilineField("Permanent address (parents)",get(p,"permanentAddress"),8.2f);
+-        multilineField("Photo URL",get(p,"photoUrl"),7.1f);
++        // URLs are implementation metadata; reports contain the portrait itself.
++        multilineField("Section :-",get(p,"section"),9.2f);
+         if(!get(p,"college").isEmpty())multilineField("Institute",get(p,"college"),8.2f);
+         ensure(15);rect(M,y,R,y+1,LINE);y+=15;
+     }
+--- a/app/src/main/java/com/campus/simplus/LargeXlsxReader.java
++++ b/app/src/main/java/com/campus/simplus/LargeXlsxReader.java
+@@ -208,7 +208,10 @@
+     private static boolean student(String[] a){
+         String name=a[0].trim(),roll=a[1].trim();
+         if(name.length()<2||name.length()>180||!name.matches(".*[\\p{L}].*"))return false;
+-        if(roll.length()<5||roll.length()>36||!roll.matches("[\\p{L}0-9_./-]+"))return false;
++        // University roll numbers may not yet have been issued. Admission number
++        // or a valid DOB can identify a student until the university issues one.
++        if(!roll.isEmpty()&&(roll.length()<5||roll.length()>36||!roll.matches("[\\p{L}0-9_./-]+")))return false;
++        if(roll.isEmpty()&&a[2].trim().isEmpty()&&a[4].trim().isEmpty())return false;
+         int matches=0;for(int i=0;i<13;i++)if(isHeader(i,a[i]))matches++;
+         return matches<4 && !norm(name).equals("name");
+     }
+@@ -261,11 +264,11 @@
+                     if(matches>=9){started=true;return;}
+                     if(!started){
+                         if(student(cells))started=true;
+-                        else{if(++skipped>100)throw new IllegalArgumentException("Name and University Roll No must be in columns A and B");return;}
++                        else{if(++skipped>100)throw new IllegalArgumentException("Name must be in column A; columns B (roll) may be blank when not yet issued");return;}
+                     }
+-                    if(!student(cells))throw new IllegalArgumentException("Invalid student record in Excel row "+rowNumber+" (columns A and B)");
++                    if(!student(cells))throw new IllegalArgumentException("Invalid student record in Excel row "+rowNumber+" (name in A; supply admission no or DOB when B is blank)");
+                     String roll=cells[1].replaceFirst("\\.0+$","");
+-                    if(!rolls.add(roll.toUpperCase(Locale.ROOT)))throw new IllegalArgumentException("Duplicate University Roll No in Excel row "+rowNumber);
++                    if(!roll.isEmpty()&&!rolls.add(roll.toUpperCase(Locale.ROOT)))throw new IllegalArgument
