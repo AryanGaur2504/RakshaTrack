@@ -1,0 +1,65 @@
+--- a/app/src/main/java/com/campus/simplus/StudentRosterStore.java
++++ b/app/src/main/java/com/campus/simplus/StudentRosterStore.java
+@@ -62,7 +62,8 @@
+             for(int i=0;i<Math.min(25,roster.length());i++){
+                 JSONObject row=roster.optJSONObject(i);if(row==null)continue;
+                 list.put(new JSONObject().put("index",i).put("name",row.optString("name"))
+-                    .put("roll",row.optString("roll")).put("semester",row.optString("semester")));
++                    .put("roll",row.optString("roll")).put("admission",row.optString("admission"))
++                    .put("semester",row.optString("semester")));
+             }
+             out.put("students",list);
+             if(selected()!=null)out.put("student",new JSONObject(selected().toString()));
+@@ -73,17 +74,44 @@
+         if(index<0||index>=roster.length())throw new IllegalArgumentException("Student does not exist");
+         selected=index;context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",index).apply();return snapshot();
+     }
+-    synchronized JSONObject importXlsx(Uri uri)throws Exception{
++    private static String normalized(String s){return (s==null?"":s).trim().toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");}
++    private static String stableKey(JSONObject person,int position){
++        String roll=normalized(person.optString("roll"));
++        if(!roll.isEmpty())return "roll:"+roll;
++        String admission=normalized(person.optString("admission"));
++        if(!admission.isEmpty())return "admission:"+admission;
++        return "pending:"+normalized(person.optString("name"))+"|"+normalized(person.optString("dob"))+"|"+
++            normalized(person.optString("father"))+"|"+position;
++    }
++    synchronized JSONObject importXlsx(Uri uri)throws Exception{return importXlsx(uri,false);}
++    synchronized JSONObject importXlsx(Uri uri,boolean extend)throws Exception{
+         JSONArray entries=LargeXlsxReader.load(context,uri);
+         if(entries.length()==0)throw new IllegalArgumentException("No student records found");
+         JSONArray previous=roster;int previousSelection=selected;
+-        roster=entries;selected=0;
++        JSONArray updated=new JSONArray();java.util.HashSet<String> known=new java.util.HashSet<>();
++        if(extend)for(int i=0;i<roster.length();i++){
++            JSONObject student=roster.optJSONObject(i);if(student==null)continue;
++            String key=student.optString("studentKey",stableKey(student,i));
++            try{student.put("studentKey",key);}catch(Exception ignored){}
++            known.add(key);updated.put(student);
++        }
++        int added=0,skipped=0;
++        for(int i=0;i<entries.length();i++){
++            JSONObject student=entries.optJSONObject(i);if(student==null)continue;
++            String key=stableKey(student,i);
++            if(!known.add(key)){skipped++;continue;}
++            student.put("studentKey",key);updated.put(student);added++;
++        }
++        if(updated.length()==0)throw new IllegalArgumentException("No student rows to import");
++        if(updated.length()>LargeXlsxReader.MAX_STUDENTS)throw new IllegalArgumentException("Combined roster exceeds 50,000 students");
++        roster=updated;selected=extend&&previousSelection>=0?previousSelection:0;
+         try {save();}catch(Exception e){
+             roster=previous;selected=previousSelection;
+             throw new IllegalArgumentException("Could not save imported students securely: "+e.getMessage());
+         }
+-        context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",0).apply();
+-        return snapshot();
++        context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",selected).apply();
++        JSONObject snap=snapshot();snap.put("added",added);snap.put("duplicatesSkipped",skipped);
++        snap.put("mode",extend?"extend":"replace");return snap;
+     }
+     synchronized JSONObject search(String q,int limit){
+         String needle=q==null?"":q.trim().toLowerCase(Locale.ROOT);
+@@ -91,10 +119,10 @@
+         JSONArray list=new JSONArray();
+         for(int i=0;i<roster.length();i++){
+             JSONObject person=roster.o
