@@ -1,0 +1,66 @@
+'__ADMISSION__'",JSONObject.quote(importedAdmission))
+-                .replace("'__DOB__'",JSONObject.quote(digits));
++                .replace("'__DOB__'",JSONObject.quote(digits))
++                .replace("'__PASSWORD__'",JSONObject.quote(simTemporaryPassword));
+             erp.evaluateJavascript(script,ignored->{
+                 if(token==simFillToken&&route(current(),"/Login"))
+                     main.postDelayed(()->repeatSimFill(token,attempt+1),830);
+@@ -282,7 +315,8 @@
+                     lastAktuCaptureSignature=signature;
+                     captureResults("aktu",success->{
+                         aktuCaptureBusy=false;
+-                        if(success){emitStatus("AKTU One View result captured from the official page",true);showApp.run();}
++                        if(success){emitStatus("AKTU One View result captured from the official page",true);showApp.run();
++                            if(aktuCaptured!=null){Runnable listener=aktuCaptured;aktuCaptured=null;listener.run();}}
+                         else lastAktuCaptureSignature="";
+                     });
+                 }
+@@ -418,15 +452,27 @@
+                     scanRetries=0;scanStage="show-semester";scheduleScan(450);
+                 });break;
+             case "show-semester":
+-                // SIM's Exam Name stays untouched. Show returns ALL sessional rows.
+-                runScan("show",null,data->{
+-                    String status=data.optString("state");
+-                    if("show-clicked".equals(status)){
+-                        beforeShowFingerprint=data.optString("beforeFingerprint","");
+-                        candidateFingerprint="";candidateStableReads=0;
+-                        scanStage="read-semester";scanRetries=0;scheduleScan(1450);
+-                    }else nextSemester("Show button unavailable for semester");
+-                });break;
++                // ASP.NET posts the entire page. Set the NEXT state BEFORE clicking;
++                // the WebView JS callback is often cancelled by form navigation.
++                scanStage="read-semester";scanRetries=0;
++                candidateFingerprint="";candidateStableReads=0;
++                beforeShowFingerprint=beforeSelectFingerprint;
++                try{
++                    String js=asset("result_scan.js")
++                        .replace("'__ACTION__'",JSONObject.quote("show"))
++                        .replace("__ARGS__","{}");
++                    erp.evaluateJavascript(js,raw->{
++                        if(!scanning||!"read-semester".equals(scanStage))return;
++                        try{
++                            JSONObject reply=new JSONObject(decode(raw));
++                            if("no-show-button".equals(reply.optString("state")))nextSemester("Show button unavailable for semester");
++                            else{beforeShowFingerprint=reply.optString("beforeFingerprint",beforeShowFingerprint);scheduleScan(1100);}
++                        }catch(Exception ignored){scheduleScan(1500);}
++                    });
++                    // Guarantees a follow-up even when Show causes a full postback.
++                    scheduleScan(1850);
++                }catch(Exception e){nextSemester("Show control could not be activated");}
++                break;
+             case "read-semester":
+                 runScan("inspect",null,data->{
+                     JSONObject selected=data.optJSONObject("semester");
+@@ -439,7 +485,8 @@
+                         nextSemester("ERP kept loading; no marks saved");return;
+                     }
+                     String fingerprint=data.optString("marksFingerprint","");
+-                    if(!data.optBoolean("hasMarks")||fingerprint.isEmpty()){
++                    if(!data.optBoolean("hasMarks")||fingerprint.isEmpty()||
++                        !"MCPH1_SCPH_gvExamDetail".equals(data.optString("examGridId"))){
+                         candidateFingerprint="";candidateStableReads=0;
+                         if(++scanRetries<24){scheduleScan(1000);return;}
+                         semesterVisited++;nextSemester("No published marks found for this semester");return;
+@@ -491,7 +538,8 @@
+         scheduleScan
