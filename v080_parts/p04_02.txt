@@ -1,0 +1,67 @@
+ion(){
++        if(!collecting)return;
++        JSONObject student=rosterStore.selected();
++        String roll=student==null?"":student.optString("roll","").replaceAll("[^0-9]","");
++        if(roll.length()<8){finishFullCollection("SIM attendance and results processed. AKTU skipped: no university roll number issued.");return;}
++        collectionProgress("aktu","AKTU: complete any official verification, then View Result",false);
++        academics.setAktuCaptured(()->finishFullCollection("Collection complete. Check each source for unavailable records."));
++        academics.openAktu(roll);
++    }
++    private void finishFullCollection(String message){
++        if(!collecting)return;
++        collecting=false;collectionSerial++;
++        if(academics!=null)academics.setSimTemporaryPassword("");
++        collectionProgress("complete",message,true);showApp();
++    }
++    private void cancelFullCollection(){
++        if(!collecting)return;
++        collecting=false;collectionSerial++;
++        if(academics!=null){academics.setSimTemporaryPassword("");academics.setAktuCaptured(null);academics.setScanCompletion(null);}
++        collectionProgress("cancelled","Collection stopped. Previously saved records remain.",true);
++    }
++    private void showRosterImport(boolean extend){
++        importExtend=extend;
+         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+         pick.addCategory(Intent.CATEGORY_OPENABLE);
+         pick.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+@@ -386,6 +491,7 @@
+             int before=rosterStore.snapshot().optInt("selected",-1);
+             JSONObject snap=rosterStore.choose(index);
+             if(before!=index){
++                cancelFullCollection();
+                 collegeSessionReady=false;afterCollegeLogin=null;mostRecentCollegeRoute=ERP;
+                 if(academics!=null){academics.stopScan("Student changed; previous scan stopped");academics.useImportedStudent(rosterStore.selected());}
+                 CookieManager.getInstance().removeAllCookies(null);
+@@ -399,14 +505,21 @@
+     private void importRosterDocument(Uri uri){
+         new Thread(()->{
+             try{
+-                JSONObject parsed=rosterStore.importXlsx(uri);
++                final boolean merge=importExtend;
++                JSONObject oldStudent=rosterStore.selected();
++                final String previousKey=oldStudent==null?"":oldStudent.optString("studentKey","");
++                JSONObject parsed=rosterStore.importXlsx(uri,merge);
++                JSONObject newStudent=rosterStore.selected();
++                final boolean selectionChanged=!merge||newStudent==null||!previousKey.equals(newStudent.optString("studentKey",""));
+                 main.post(()->{
+-                    collegeSessionReady=false;afterCollegeLogin=null;
+-                    CookieManager.getInstance().removeAllCookies(null);CookieManager.getInstance().flush();
+-                    erpView.loadUrl("about:blank");
+-                    if(academics!=null){academics.stopScan("Student roster imported");academics.useImportedStudent(rosterStore.selected());}
++                    if(selectionChanged){
++                        cancelFullCollection();collegeSessionReady=false;afterCollegeLogin=null;
++                        CookieManager.getInstance().removeAllCookies(null);CookieManager.getInstance().flush();
++                        erpView.loadUrl("about:blank");
++                        if(academics!=null){academics.stopScan("Student roster imported");academics.useImportedStudent(rosterStore.selected());}
++                    }
+                     appView.evaluateJavascript("window.onRosterImported("+parsed.toString()+");",null);
+-                    message("Imported "+rosterStore.count()+" student(s)");
++                    message("Added "+parsed.optInt("added")+" student(s), skipped "+parsed.optInt("duplicatesSkipped")+" duplicates. Total "+rosterStore.count());
+                 });
+             }catch(Exception e){
+                 String reason = e.getMessage()==null?"Unreadable Excel workbook":e.getMessage();
+@@ -419,7 +532,12 @@
+     }
+ 
+     private final class UiBridge {
+-        @Javascri
