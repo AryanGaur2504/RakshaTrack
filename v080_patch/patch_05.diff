@@ -1,0 +1,122 @@
+--- a/app/src/main/java/com/campus/simplus/StudentRosterStore.java
++++ b/app/src/main/java/com/campus/simplus/StudentRosterStore.java
+@@ -62,7 +62,8 @@
+             for(int i=0;i<Math.min(25,roster.length());i++){
+                 JSONObject row=roster.optJSONObject(i);if(row==null)continue;
+                 list.put(new JSONObject().put("index",i).put("name",row.optString("name"))
+-                    .put("roll",row.optString("roll")).put("semester",row.optString("semester")));
++                    .put("roll",row.optString("roll")).put("admission",row.optString("admission"))
++                    .put("semester",row.optString("semester")));
+             }
+             out.put("students",list);
+             if(selected()!=null)out.put("student",new JSONObject(selected().toString()));
+@@ -73,17 +74,44 @@
+         if(index<0||index>=roster.length())throw new IllegalArgumentException("Student does not exist");
+         selected=index;context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",index).apply();return snapshot();
+     }
+-    synchronized JSONObject importXlsx(Uri uri)throws Exception{
++    private static String normalized(String s){return (s==null?"":s).trim().toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");}
++    private static String stableKey(JSONObject person,int position){
++        String roll=normalized(person.optString("roll"));
++        if(!roll.isEmpty())return "roll:"+roll;
++        String admission=normalized(person.optString("admission"));
++        if(!admission.isEmpty())return "admission:"+admission;
++        return "pending:"+normalized(person.optString("name"))+"|"+normalized(person.optString("dob"))+"|"+
++            normalized(person.optString("father"))+"|"+position;
++    }
++    synchronized JSONObject importXlsx(Uri uri)throws Exception{return importXlsx(uri,false);}
++    synchronized JSONObject importXlsx(Uri uri,boolean extend)throws Exception{
+         JSONArray entries=LargeXlsxReader.load(context,uri);
+         if(entries.length()==0)throw new IllegalArgumentException("No student records found");
+         JSONArray previous=roster;int previousSelection=selected;
+-        roster=entries;selected=0;
++        JSONArray updated=new JSONArray();java.util.HashSet<String> known=new java.util.HashSet<>();
++        if(extend)for(int i=0;i<roster.length();i++){
++            JSONObject student=roster.optJSONObject(i);if(student==null)continue;
++            String key=student.optString("studentKey",stableKey(student,i));
++            try{student.put("studentKey",key);}catch(Exception ignored){}
++            known.add(key);updated.put(student);
++        }
++        int added=0,skipped=0;
++        for(int i=0;i<entries.length();i++){
++            JSONObject student=entries.optJSONObject(i);if(student==null)continue;
++            String key=stableKey(student,i);
++            if(!known.add(key)){skipped++;continue;}
++            student.put("studentKey",key);updated.put(student);added++;
++        }
++        if(updated.length()==0)throw new IllegalArgumentException("No student rows to import");
++        if(updated.length()>LargeXlsxReader.MAX_STUDENTS)throw new IllegalArgumentException("Combined roster exceeds 50,000 students");
++        roster=updated;selected=extend&&previousSelection>=0?previousSelection:0;
+         try {save();}catch(Exception e){
+             roster=previous;selected=previousSelection;
+             throw new IllegalArgumentException("Could not save imported students securely: "+e.getMessage());
+         }
+-        context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",0).apply();
+-        return snapshot();
++        context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",selected).apply();
++        JSONObject snap=snapshot();snap.put("added",added);snap.put("duplicatesSkipped",skipped);
++        snap.put("mode",extend?"extend":"replace");return snap;
+     }
+     synchronized JSONObject search(String q,int limit){
+         String needle=q==null?"":q.trim().toLowerCase(Locale.ROOT);
+@@ -91,10 +119,10 @@
+         JSONArray list=new JSONArray();
+         for(int i=0;i<roster.length();i++){
+             JSONObject person=roster.optJSONObject(i);if(person==null)continue;
+-            String name=person.optString("name"),roll=person.optString("roll");
+-            if(!needle.isEmpty()&&!name.toLowerCase(Locale.ROOT).contains(needle)&&!roll.toLowerCase(Locale.ROOT).contains(needle))continue;
++            String name=person.optString("name"),roll=person.optString("roll"),admission=person.optString("admission");
++            if(!needle.isEmpty()&&!name.toLowerCase(Locale.ROOT).contains(needle)&&!roll.toLowerCase(Locale.ROOT).contains(needle)&&!admission.toLowerCase(Locale.ROOT).contains(needle))continue;
+             matches++;
+-            if(list.length()<take)try{list.put(new JSONObject().put("index",i).put("name",name).put("roll",roll));}catch(Exception ignored){}
++            if(list.length()<take)try{list.put(new JSONObject().put("index",i).put("name",name).put("roll",roll).put("admission",admission));}catch(Exception ignored){}
+         }
+         JSONObject result=new JSONObject();
+         try{result.put("query",q==null?"":q);result.put("count",matches);result.put("matches",list);result.put("total",roster.length());}catch(Exception ignored){}
+@@ -276,7 +304,12 @@
+             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,secret(),new GCMParameterSpec(128,nonce));
+             byte[] plain=cipher.doFinal(full,12,full.length-12);
+             JSONObject obj=new JSONObject(new String(plain,StandardCharsets.UTF_8));
+-            roster=obj.getJSONArray("students");selected=context.getSharedPreferences("simplus-roster-ui",0).getInt("selected",obj.optInt("selected",0));
++            roster=obj.getJSONArray("students");
++            for(int i=0;i<roster.length();i++){
++                JSONObject row=roster.optJSONObject(i);
++                if(row!=null&&!row.has("studentKey"))row.put("studentKey",stableKey(row,i));
++            }
++            selected=context.getSharedPreferences("simplus-roster-ui",0).getInt("selected",obj.optInt("selected",0));
+             if(selected>=roster.length()||selected<0)selected=roster.length()>0?0:-1;
+         }catch(Exception ignored){roster=new JSONArray();selected=-1;}
+     }
+--- a/tests/semester-scan.test.js
++++ b/tests/semester-scan.test.js
+@@ -6,7 +6,7 @@
+ const sem=field('semester','Semester',[option('','--Select--'),option('S1','Sem I'),option('S2','Sem II')]);
+ const exam=field('exam','Exam Name',[option('','--Select--')]);
+ const button={value:'Show',offsetWidth:100,getClientRects(){return [{}];},click(){this.clicked=true;}};
+-const document={querySelector(){return null;},querySelectorAll(selector){if(selector==='select')return [sem,exam];if(selector==='table')return [];if(selector.includes('button'))return [button];return [];}};
++const document={getElementById(id){return id==='MCPH1_SCPH_ddldrp'?sem:id==='MCPH1_SCPH_ddlExamName'?exam:id==='MCPH1_SCPH_btnRun'?button:null;},querySelector(){return null;},querySelectorAll(selector){if(selector==='select')return [sem,exam];if(selector==='table')return [];if(selector.includes('button'))return [button];return [];}};
+ const sandbox={document,Event:class{constructor(type){this.type=type;}}};
+ function run(action,args={}){const script=source.replace("'__ACTION__'",JSON.stringify(action)).replace('__ARGS__',JSON.stringify(args));return JSON.parse(vm.runInNewContext(script,sandbox));}
+ const initial=run('semesters');assert.deepEqual(initial.semester.options.map(x=>x.text),['Sem I','Sem II']);assert.equal(initial.exam.options.length,0,'Exam options are initially empty');
+--- a/tests/sim-fingerprint.test.js
++++ b/tests/sim-fingerprint.test.js
+@@ -9,7 +9,7 @@
+ let table;
+ function buildTable(){const rows=[['Subject Name','Marks Obtained'],...subjects.map((s,i)=>[s,String(i*10+50)])].map(values=>({textContent:values.join(' '),querySelectorAll(){return values.map(cell);},closest(){return table;}}));table={offsetWidth:100,getClientRects(){return [{}];},querySelector(sel){return rows[0];},querySelectorAll(){return rows;}};return table;}
+ const btn={value:'Show',offsetWidth:100,getClientRects(){return [{}];},click(){}};
+-const document={querySelector(){return null;},querySelectorAll(q){if(q==='select')return [sem,exam];if(q==='table')return [buildTable()];if(q.includes('button'))return [btn];return [];}};
++const document={getElementById(id){return id==='MCPH1_SCPH_ddldrp'?sem:id==='MCPH1_SCPH_ddlExamName'?exam:id==='MCPH1_SCPH_btnRun'?btn:id==='MCPH1_SCPH_gvExamDetail'?buildTable():null;},querySelector(){return null;},querySelectorAll(q){if(q==='select')return [sem,exam];if(q==='table')return [buildTable()];if(q.includes('button'))return [btn];return [];}};
+ const run=(action,args={})=>JSON.parse(vm.runInNewContext(source.replace("'__ACTION__'",JSON.stringify(action)).replace('__ARGS__',JSON.stringify(args)),{document,Event:class{constructor(type){this.type=type;}}}));
+ const first=run('inspect');assert.equal(first.hasMarks,true);assert.ok(first.marksFingerprint);
+ run('choose-semester',{field:first.semester,value:'S2'});
+--- a/tests/sim-login-fill.test.js
++++ b/tests/sim-login-fill.test.js
+@@ -11,7 +11,7 @@
+  const location={protocol:'https:',hostname:domain,port:'8072',pathname:'/ISIMGLB/Login'};
+  const sandbox={document,location,Date,HTMLInputElement:function(){},Event:class{constructor(type){this.type=type}},CSS:{escape:x=>x}};
+  sandbox.HTMLInputElement.prototype={};
+- const raw=vm.runInNewContext(script.replace("'__ADMISSION__'",JSON.stringify('STUDENT001')).replace("'__DOB__'",JSON.stringify(dob)),sandbox);
++ const raw=vm.runInNewContext(script.replace("'__ADMISSION__'",JSON.stringify('STUDENT001')).replace("'__DOB__'",JSON.stringify(dob)).replace("'__PASSWORD__'",JSON.stringify('')),sandbox);
+  return {out:JSON.parse(raw),fields};
+ }
+ let t=check();assert.equal(t.out.stage,'login');assert.equal(t.fields[0].value,'STUDENT001');assert.equal(t.fields[1].value,'01122003');assert.equal(t.fields[2].value,'');
