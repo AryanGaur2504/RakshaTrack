@@ -116,7 +116,7 @@ jobs:
           paths=sorted([p for d in ("app","tests") for p in Path(d).rglob("*") if p.is_file()] + [Path(p) for p in ("build.gradle","gradle.properties","settings.gradle")])
           h=hashlib.sha256()
           for p in paths:
-              h.update(p.as_posix().encode()+b'\\0'+p.read_bytes()+b'\\0')
+              h.update(p.as_posix().encode()+b'\0'+p.read_bytes()+b'\0')
           expected="d69fefb78691ccd7b0149990ada265aa0c9ae72021206496cbddd7cfdd09ec53"
           observed=h.hexdigest()
           print("Number of application and test files:",len(paths))
