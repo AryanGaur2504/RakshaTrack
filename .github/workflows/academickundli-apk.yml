@@ -1,4 +1,4 @@
-name: Build AcademicKundli v0.9.4 APK
+name: Build AcademicKundli v0.9.5 APK
 on:
   push:
     branches:
@@ -6,6 +6,7 @@ on:
     paths:
       - AcademicKundli_v0.9.4_Source.zip
       - .github/workflows/academickundli-apk.yml
+      - academickundli-build/v095_hotfix.py
   workflow_dispatch:
 
 permissions:
@@ -23,6 +24,8 @@ jobs:
           echo "3f6128f129b4a29e1606ed06fb7725b476a6959b4bb12de53c6ed58c33f331de  AcademicKundli_v0.9.4_Source.zip" | sha256sum --check
           unzip -t AcademicKundli_v0.9.4_Source.zip
           unzip -q AcademicKundli_v0.9.4_Source.zip -d build-input
+      - name: Apply AcademicKundli v0.9.5 fixes
+        run: python3 academickundli-build/v095_hotfix.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -69,6 +72,6 @@ jobs:
           sha256sum build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: AcademicKundli-v0.9.4-debug-APK
+          name: AcademicKundli-v0.9.5-debug-APK
           path: build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
