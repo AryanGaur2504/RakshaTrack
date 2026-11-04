@@ -1,0 +1,35 @@
+ge||e).slice(0,80));return false;}};
+ window.receiveStudentProfile=raw=>{try{const d=typeof raw==='string'?JSON.parse(raw):raw;
+-if(rosterProfile&&d.roll&&String(d.roll).replace(/\D/g,'')!==String(rosterProfile.roll).replace(/\D/g,''))return toast('ERP is signed in as another student. Switch to the correct account.');
++if(rosterProfile&&rosterProfile.roll&&d.roll&&String(d.roll).replace(/\D/g,'')!==String(rosterProfile.roll).replace(/\D/g,''))return toast('ERP is signed in as another student. Switch to the correct account.');
+ if(rosterProfile)return toast('Excel profile retained. SIM authentication can be used for results.');
+ const p=state.profile||{};for(const k of ['name','father','roll','program','semester','college','session','admission']){if(typeof d[k]==='string'&&d[k].trim())p[k]=d[k].trim().slice(0,100);}state.profile=p;persist();if('dobReady' in d){resultState.dobReady=!!d.dobReady;persistResults();}render();toast('Student details refreshed from SIM');}catch(e){toast('Could not read the student profile');}};
++window.onOfficialSection=obj=>{
++ const section=String(obj?.section||'').trim();if(!section)return;
++ state.profile.section=section.slice(0,90);persist();if(page==='profile')render();
++ toast('Section :- '+section);
++};
++window.onCollectionProgress=obj=>{
++ collection={active:!!obj.active,stage:String(obj.stage||''),message:String(obj.message||'')};
++ const bar=document.getElementById('syncBanner');
++ if(bar){bar.classList.toggle('hidden',!collection.active);document.getElementById('syncMessage').textContent=collection.message;}
++ if(obj.done)toast(collection.message);
++ if(page==='home')render();
++};
++window.cancelFullCollection=()=>{native('cancelFullCollection');native('stopAutoSync');};
++window.startFullCollection=()=>{
++ if(!rosterProfile)return toast('Select a student first.');
++ const date=E.parseDate(document.getElementById('oneTapStart')?.value||state.start);
++ if(!date||date>now())return toast('Select a valid semester start date.');
++ const pw=document.getElementById('oneTapSimPassword');
++ const password=(pw?.value||'').slice(0,100);
++ if(pw)pw.value='';
++ state.start=date;state.setup=true;persist();
++ if(native('startFullCollection',date,password)){
++   collection={active:true,stage:'attendance',message:'Starting attendance collection and official login…'};
++   render();
++ }else toast('One-tap collection requires the updated Android app.');
++};
+ window.onExamScanProgress=obj=>{if(Array.isArray(obj.semesters))simScanReport=obj.semesters;const bar=document.getElementById('syncBanner');bar.classList.toggle('hidden',!!obj.done);document.getElementById('syncMessage').textContent=obj.message||'Reading available exams';if(obj.done){render();toast(obj.message||'Exam scan complete');}};
+ render();
+ })();
