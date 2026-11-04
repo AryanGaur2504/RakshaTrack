@@ -1,0 +1,16 @@
+rn [buildTable()];if(q.includes('button'))return [btn];return [];}};
++const document={getElementById(id){return id==='MCPH1_SCPH_ddldrp'?sem:id==='MCPH1_SCPH_ddlExamName'?exam:id==='MCPH1_SCPH_btnRun'?btn:id==='MCPH1_SCPH_gvExamDetail'?buildTable():null;},querySelector(){return null;},querySelectorAll(q){if(q==='select')return [sem,exam];if(q==='table')return [buildTable()];if(q.includes('button'))return [btn];return [];}};
+ const run=(action,args={})=>JSON.parse(vm.runInNewContext(source.replace("'__ACTION__'",JSON.stringify(action)).replace('__ARGS__',JSON.stringify(args)),{document,Event:class{constructor(type){this.type=type;}}}));
+ const first=run('inspect');assert.equal(first.hasMarks,true);assert.ok(first.marksFingerprint);
+ run('choose-semester',{field:first.semester,value:'S2'});
+--- a/tests/sim-login-fill.test.js
++++ b/tests/sim-login-fill.test.js
+@@ -11,7 +11,7 @@
+  const location={protocol:'https:',hostname:domain,port:'8072',pathname:'/ISIMGLB/Login'};
+  const sandbox={document,location,Date,HTMLInputElement:function(){},Event:class{constructor(type){this.type=type}},CSS:{escape:x=>x}};
+  sandbox.HTMLInputElement.prototype={};
+- const raw=vm.runInNewContext(script.replace("'__ADMISSION__'",JSON.stringify('STUDENT001')).replace("'__DOB__'",JSON.stringify(dob)),sandbox);
++ const raw=vm.runInNewContext(script.replace("'__ADMISSION__'",JSON.stringify('STUDENT001')).replace("'__DOB__'",JSON.stringify(dob)).replace("'__PASSWORD__'",JSON.stringify('')),sandbox);
+  return {out:JSON.parse(raw),fields};
+ }
+ let t=check();assert.equal(t.out.stage,'login');assert.equal(t.fields[0].value,'STUDENT001');assert.equal(t.fields[1].value,'01122003');assert.equal(t.fields[2].value,'');
