@@ -162,6 +162,11 @@ jobs:
           encoded=Path('restore_input/v094_patch.br.b64').read_text().strip()
           patch=brotli.decompress(base64.b64decode(encoded,validate=True))
           assert patch.startswith(b'--- a/app/build.gradle'), 'Unexpected patch source'
+          # The rebuilt v0.9.3 source has a different non-runtime README;
+          # keep application/code patch exact without depending on README context.
+          begin=patch.index(b'--- a/README.md\n')
+          end=patch.index(b'--- /dev/null\n',begin)
+          patch=patch[:begin]+patch[end:]
           Path('/tmp/simplus-v094.patch').write_bytes(patch)
           print('v0.9.4 patch bytes:',len(patch))
           PY
