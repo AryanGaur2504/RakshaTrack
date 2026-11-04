@@ -1,0 +1,86 @@
+--- a/app/src/main/assets/app.js
++++ b/app/src/main/assets/app.js
+@@ -2,6 +2,7 @@
+ const E=window.SimEngine, X=window.SimExams;
+ const STORE='simplus:v1:private', EXAMS='simplus:v3:results';
+ let activeAttendanceKey=STORE,activeResultsKey=EXAMS;
++let simScanReport=[];
+ let rosterReady=false,rosterStudents=[],rosterSelected=-1,rosterProfile=null;
+ let rosterImporting=false,rosterImportError='',rosterImportNote='';
+ let rosterCount=0,studentSearchOpen=false,studentQuery='',studentMatches=[],studentMatchCount=0,studentSearchTimer=null;
+@@ -218,6 +219,7 @@
+  ${selected?`<div class="login-steps"><div><span>1</span><p>Roll number autofills on the initial AKTU screen.</p></div><div><span>2</span><p>Next, roll number and DOB autofill. Finish CAPTCHA, then tap <strong>View Result</strong>. The app reads the scorecard automatically.</p></div></div>`:
+  `<p class="small subtle" style="line-height:1.65">Selects each available semester and presses Show without changing Exam Name. All sessional rows are captured together; unreleased results stay empty.</p>`}
+  <div class="actions">${button(selected?'Open AKTU One View':'Scan available semesters',selected?'openAktu()':'scanCollegeResults()')}${button('Capture visible result','captureResult()','ghost')}${selected?button('Fill current login step','prepareAktu()','ghost'):button('Open SIM results','openCollegeResult()','ghost')}</div></div>
++ ${!selected&&simScanReport.length?`<div class="panel"><div class="section-top"><h2 class="section-title">Semester scan verification</h2><span class="badge">${simScanReport.filter(x=>x.state==='verified').length}/${simScanReport.length} verified</span></div><div class="scan-audit">${simScanReport.map(x=>`<div class="scan-audit-entry"><strong>${esc(x.semester||'Semester')}</strong><span class="badge ${x.state==='verified'?'green':x.state==='no-results'?'':'orange'}">${x.state==='verified'?'Imported':x.state==='no-results'?'Unreleased':'Needs recheck'}</span><small>${esc(x.reason||'')}</small></div>`).join('')}</div></div>`:''}
+  <div class="report-cover"><div class="overline">YOUR ACADEMIC TRANSCRIPT</div><h3>Candidate result report</h3><p>Complete student profile from your Excel, photo and consolidated university/college results. Missing results are labelled as unavailable.</p>${button('Export results PDF','downloadReport()')}</div>
+  <div class="info-box">SIM+ reads official result pages only. Complete CAPTCHA in the official browser; once AKTU shows the scorecard, the app captures it automatically. These results are not a substitute for official marksheets.</div></div>`;
+ }
+@@ -250,7 +252,7 @@
+ function profileView(){const p=state.profile;
+ const items=[['Full name',p.name],['University roll no.',p.roll],['Admission no.',p.admission],['Father’s name',p.father],['Date of birth',p.dob],['Year of admission',p.admissionYear],['Category',p.category],['Course',p.course||p.program],['Current semester',p.semester],['Session',p.session],['Correspondence address (parents)',p.correspondenceAddress],['Permanent address (parents)',p.permanentAddress],['Photo URL',p.photoUrl]];
+ const photo=String(p.photoUrl||'');let safePhoto='';try{const url=new URL(photo);if(url.protocol==='https:'&&url.hostname)safePhoto=url.href;}catch(e){}
+-return `<div class="stack"><div class="panel"><div class="row align-start" style="gap:16px;margin-bottom:18px"><div class="roster-avatar">${safePhoto?`<img src="${esc(safePhoto)}" alt="Student portrait" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span class="photo-fallback" style="display:none">PHOTO<br>UNAVAILABLE</span>`:'<span class="photo-fallback">PHOTO URL<br>MISSING</span>'}</div><div><h2 style="margin:0 0 6px">${esc(p.name||'Student profile')}</h2><div class="subtle small">${esc(p.roll||'No roll number')}</div><div class="badge" style="margin-top:8px">${esc(p.semester||'Semester not set')}</div></div></div><div class="course-grid">${items.map(([label,val])=>`<div class="course-info"><span>${esc(label)}</span><strong>${esc(val||'Not supplied')}</strong></div>`).join('')}</div><div class="actions" style="margin-top:20px">${button('Generate comprehensive PDF','downloadReport()')}${button('Re-import Excel','importStudentExcel()','ghost')}</div><div class="tiny-line">Student details come from your encrypted Excel roster. Photo loading contacts its host only when displayed or exported. SIM/AKTU marks are captured separately from official authenticated pages.</div></div><div class="panel"><h2 class="section-title">Attendance preferences</h2><div class="fields" style="margin:17px 0"><label class="field">Semester start<input type="date" id="semesterStart" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">Attendance target (%)<input type="number" id="goalTarget" min="1" max="100" value="${state.target}"></label></div>${button('Save preferences','savePreferences()')}</div><div class="panel"><h2 class="section-title">Official academic portals</h2><p class="tiny-line">Selecting a different student does not log into their ERP account. Use their own authorized SIM login and CAPTCHA. AKTU roll and DOB are prepared from the selected roster row.</p><div class="actions">${button('SIM ERP login','openCollege()')}${button('AKTU One View','openAktu()','ghost')}</div><div class="actions" style="margin-top:15px">${button('Export attendance backup','backupLocal()','ghost')}${button('Restore old backup','restoreLocal()','ghost')}${button('Clear cached results','clearResults()','ghost')}</div></div></div>`;}
++return `<div class="stack"><div class="panel"><div class="row align-start" style="gap:16px;margin-bottom:18px"><div class="roster-avatar">${safePhoto?`<img src="${esc(safePhoto)}" alt="Student portrait" loading="lazy" onload="if(window.Native&amp;&amp;Native.cacheStudentPhoto)Native.cacheStudentPhoto(this.getAttribute('src'))" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span class="photo-fallback" style="display:none">PHOTO<br>UNAVAILABLE</span>`:'<span class="photo-fallback">PHOTO URL<br>MISSING</span>'}</div><div><h2 style="margin:0 0 6px">${esc(p.name||'Student profile')}</h2><div class="subtle small">${esc(p.roll||'No roll number')}</div><div class="badge" style="margin-top:8px">${esc(p.semester||'Semester not set')}</div></div></div><div class="course-grid">${items.map(([label,val])=>`<div class="course-info"><span>${esc(label)}</span><strong>${esc(val||'Not supplied')}</strong></div>`).join('')}</div><div class="actions" style="margin-top:20px">${button('Generate comprehensive PDF','downloadReport()')}${button('Re-import Excel','importStudentExcel()','ghost')}</div><div class="tiny-line">Student details come from your encrypted Excel roster. Photo loading contacts its host only when displayed or exported. SIM/AKTU marks are captured separately from official authenticated pages.</div></div><div class="panel"><h2 class="section-title">Attendance preferences</h2><div class="fields" style="margin:17px 0"><label class="field">Semester start<input type="date" id="semesterStart" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">Attendance target (%)<input type="number" id="goalTarget" min="1" max="100" value="${state.target}"></label></div>${button('Save preferences','savePreferences()')}</div><div class="panel"><h2 class="section-title">Official academic portals</h2><p class="tiny-line">Selecting a different student does not log into their ERP account. Use their own authorized SIM login and CAPTCHA. AKTU roll and DOB are prepared from the selected roster row.</p><div class="actions">${button('SIM ERP login','openCollege()')}${button('AKTU One View','openAktu()','ghost')}</div><div class="actions" style="margin-top:15px">${button('Export attendance backup','backupLocal()','ghost')}${button('Restore old backup','restoreLocal()','ghost')}${button('Clear cached results','clearResults()','ghost')}</div></div></div>`;}
+ window.savePreferences=()=>{
+  const raw=document.getElementById('semesterStart')?.value||'',s=E.parseDate(raw);
+  const t=Number(document.getElementById('goalTarget')?.value);
+@@ -279,17 +281,17 @@
+ 
+  if(source==='college'&&!rosterProfile){for(const k of ['name','father','roll','program','admission'])if(typeof identity[k]==='string'&&identity[k].trim()){state.profile[k]=identity[k].trim().slice(0,110);identityChanged=true;}}
+  if(identityChanged)persist();
+- if(!parsed.results.length){if(identityChanged)render();return;}
++ if(!parsed.results.length){if(identityChanged)render();return false;}
+  const byId=new Map(resultState.records.map(r=>[r.id,r]));
+  for(const r of parsed.results){const previous=byId.get(r.id);if(previous&&previous.subjects?.length){const key=s=>[s.code||s.name,s.examType,s.marksType,s.examMonth].map(x=>String(x||'').toLowerCase()).join('|');const existing=new Map(previous.subjects.map(s=>[key(s),s]));r.subjects.forEach(s=>existing.set(key(s),s));r.subjects=[...existing.values()];}
+  byId.set(r.id,r);}
+  resultState.records=Array.from(byId.values()).sort((a,b)=>String(b.semester||'').localeCompare(a.semester||'',undefined,{numeric:true}));resultState.lastSync=new Date().toISOString();resultState.source=source;
+- persistResults();examTab=source;page='results';render();toast(`Imported ${parsed.results.length} official result record(s)`);
+- }catch(e){toast('Could not parse official result: '+String(e.message||e).slice(0,80));}};
++ persistResults();examTab=source;page='results';render();toast(`Imported ${parsed.results.length} official result record(s)`);return true;
++ }catch(e){toast('Could not parse official result: '+String(e.message||e).slice(0,80));return false;}};
+ window.receiveStudentProfile=raw=>{try{const d=typeof raw==='string'?JSON.parse(raw):raw;
+ if(rosterProfile&&d.roll&&String(d.roll).replace(/\D/g,'')!==String(rosterProfile.roll).replace(/\D/g,''))return toast('ERP is signed in as another student. Switch to the correct account.');
+ if(rosterProfile)return toast('Excel profile retained. SIM authentication can be used for results.');
+ const p=state.profile||{};for(const k of ['name','father','roll','program','semester','college','session','admission']){if(typeof d[k]==='string'&&d[k].trim())p[k]=d[k].trim().slice(0,100);}state.profile=p;persist();if('dobReady' in d){resultState.dobReady=!!d.dobReady;persistResults();}render();toast('Student details refreshed from SIM');}catch(e){toast('Could not read the student profile');}};
+-window.onExamScanProgress=obj=>{const bar=document.getElementById('syncBanner');bar.classList.toggle('hidden',!!obj.done);document.getElementById('syncMessage').textContent=obj.message||'Reading available exams';if(obj.done){render();toast(obj.message||'Exam scan complete');}};
++window.onExamScanProgress=obj=>{if(Array.isArray(obj.semesters))simScanReport=obj.semesters;const bar=document.getElementById('syncBanner');bar.classList.toggle('hidden',!!obj.done);document.getElementById('syncMessage').textContent=obj.message||'Reading available exams';if(obj.done){render();toast(obj.message||'Exam scan complete');}};
+ render();
+ })();
+--- a/app/src/main/assets/result_scan.js
++++ b/app/src/main/assets/result_scan.js
+@@ -27,7 +27,9 @@
+  for(let i=0;i<body.length;i++){hash^=body.charCodeAt(i);hash=Math.imul(hash,16777619);}
+  return {hasMarks:rows.length>0,marksFingerprint:rows.length?String(hash>>>0)+':'+body.length:'',resultTables:rows.length};
+ }
+-const data={state:'ok',semester:sem?describe(sem):null,exam:exam?describe(exam):null,...resultTableData()};
++const ready=document.readyState!=='loading';
++const busy=[...document.querySelectorAll('[aria-busy="true"],.loading,.spinner,[id*="UpdateProgress"],.blockUI')].some(visible);
++const data={state:'ok',ready,busy,semester:sem?describe(sem):null,exam:exam?describe(exam):null,...resultTableData()};
+ if(action==='inspect'||action==='semesters')return JSON.stringify(data);
+ if(action==='show'){
+  const btn=[...document.querySelectorAll('button,input[type=submit],input[type=button],a')].find(b=>visible(b)&&/^(show|view|search|display|result|get result)$/i.test(clean(b.value||b.textContent)));
+--- a/app/src/main/assets/style.css
++++ b/app/src/main/assets/style.css
+@@ -113,3 +113,8 @@
+ .roster-avatar .photo-fallback{font-size:10px;line-height:1.4;text-align:center;letter-spacing:.06em;font-weight:800;padding:5px}
+ .darkmode .student-search-box,.darkmode .student-search-box input{background:#18223a;color:#f4f5ff}
+ @media(max-width:520px){.roster-toolbar{gap:10px}.roster-tools{width:100%}}
++
++/* Transparent per-semester scan audit: never present an unverified result as saved. */
++.scan-audit{display:flex;flex-direction:column;gap:10px;margin-top:14px}
++.scan-audit-entry{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:12px 15px;border-radius:12px;background:var(--panel,#f8fafc);border:1px solid var(--border,rgba(120,130,150,.2))}
++.scan-audit-entry small{grid-column:1/-1;color:var(--muted,#65758b);line-height:1.5}
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -7,8 +7,8 @@
+         applicationId 'com.campus.simplus'
+         minSdk 24
+         targetSdk 35
+-        versionCode 11
+-        versionName '0.7.2'
++        versionCode 12
++        versionName '0.7.3'
+     }
+     buildTypes {
+         release { minifyEnabled false }
