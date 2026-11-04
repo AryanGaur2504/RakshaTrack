@@ -67,12 +67,17 @@ jobs:
               parts=sorted(Path('v080_parts').glob(f'p{n:02}_*.txt'))
               assert parts, f'Missing patch {n}'
               body=b''.join(p.read_bytes() for p in parts)
+              if n==2:
+                  begin=body.index(b'--- a/app/src/main/assets/sim_fill.js\n')
+                  end=body.index(b'--- /dev/null\n',begin)
+                  body=body[:begin]+body[end:]
               out=Path(f'/tmp/patch_{n:02}.diff')
               out.write_bytes(body+(b'\n' if not body.endswith(b'\n') else b''))
               print(out.name, len(body), len(parts))
           PY
           patch -p1 --batch < v080_patch/patch_00.diff
           for i in 01 02 03 04 05; do patch -p1 --batch < /tmp/patch_${i}.diff; done
+          cp v080_special/sim_fill.js app/src/main/assets/sim_fill.js
       - name: Run JavaScript tests
         run: |
           for f in app/src/main/assets/*.js; do node --check "$f"; done
