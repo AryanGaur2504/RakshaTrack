@@ -1,0 +1,61 @@
+igits))return false;
+     const d=Number(digits.slice(0,2)),m=Number(digits.slice(2,4)),y=Number(digits.slice(4));
+     const date=new Date(Date.UTC(y,m-1,d));
+@@ -43,6 +44,6 @@
+     return e.value===val;
+   };
+   const userFilled=!!admissionInput&&set(admissionInput,value);
+-  const passwordFilled=!!passwordInput&&validDob()&&set(passwordInput,digits);
++  const passwordFilled=!!passwordInput&&!!(custom||validDob())&&set(passwordInput,custom||digits);
+   return JSON.stringify({stage:'login',userFound:!!admissionInput,passwordFound:!!passwordInput,userFilled,passwordFilled,dobAvailable:validDob()});
+-})('__ADMISSION__','__DOB__')
++})('__ADMISSION__','__DOB__','__PASSWORD__')
+--- /dev/null
++++ b/app/src/main/assets/student_official.js
+@@ -0,0 +1,28 @@
++/* Authorized visible StudentOfficial data only: Section / Group Name. */
++(function(){'use strict';
++ if(location.protocol!=='https:'||location.hostname!=='glbg.servergi.com'||location.port!=='8072'||!/\/Student\/StudentOfficial/i.test(location.pathname))return JSON.stringify({state:'wrong-page'});
++ const text=x=>String(x==null?'':x).replace(/\s+/g,' ').trim().slice(0,140);
++ const sectionLabel=x=>/^(?:group(?:\s+name)?|section(?:\s+name)?|student\s+group|class\s+section)\s*[:：-]?$/i.test(text(x));
++ const rollLabel=x=>/^(?:university\s+)?roll\s*(?:no\.?|number)?\s*[:：-]?$/i.test(text(x));
++ const result={state:'ok',section:'',roll:''};
++ for(const row of document.querySelectorAll('tr')){
++  const cells=[...row.querySelectorAll('td,th')];
++  for(let i=0;i<cells.length-1;i++){
++   const label=text(cells[i].textContent);
++   const element=cells[i+1].querySelector('input:not([type=password]),select');
++   const value=text(element?(element.value||element.selectedOptions?.[0]?.textContent):cells[i+1].textContent);
++   if(sectionLabel(label)&&value&&!/select|choose|password|captcha/i.test(value))result.section=value;
++   if(rollLabel(label)&&/^\d{8,18}$/.test(value))result.roll=value;
++  }
++ }
++ if(!result.section){
++  for(const e of document.querySelectorAll('input:not([type=password]),select,span')){
++   const name=[e.id,e.getAttribute('name'),e.getAttribute('aria-label'),e.labels?.[0]?.textContent].filter(Boolean).join(' ');
++   if(/group(?:name)?|section/i.test(name)){
++    const value=text(e.value||e.selectedOptions?.[0]?.textContent||e.textContent);
++    if(value&&!/select|choose|password|captcha/i.test(value)){result.section=value;break;}
++   }
++  }
++ }
++ return JSON.stringify(result);
++})()
+--- a/app/src/main/assets/style.css
++++ b/app/src/main/assets/style.css
+@@ -118,3 +118,51 @@
+ .scan-audit{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+ .scan-audit-entry{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:12px 15px;border-radius:12px;background:var(--panel,#f8fafc);border:1px solid var(--border,rgba(120,130,150,.2))}
+ .scan-audit-entry small{grid-column:1/-1;color:var(--muted,#65758b);line-height:1.5}
++
++/* SIM+ v0.8 – warm, playful mobile design inspired by the supplied layout.
++ * Decorative images are not reused; campus records remain the visual focus. */
++:root{--bg:#f3f1ee;--panel:#fff;--panel2:#fffaf6;--ink:#272d32;--sub:#6c7278;--muted:#9299a0;--line:#f0e9e2;--indigo:#ff741f;--indigo-soft:#fff0e4;--orange:#fa761f;--nav:#24292e;--teal:#158766;--teal-soft:#e8f8f0;--red:#df5650;--red-soft:#fff0ed;--shadow:0 14px 38px rgba(48,37,27,.065)}
++body{background:#f3f1ee;color:var(--ink)}
++.rail{background:#252a2f;border-right:0}.brand-mark,.roster-mark{background:#ff7927!important;color:#fff}
++.brand .accent{color:#ff852e}.rail .nav-link.active{background:#fa7620;color:#fff}
++.panel,.nav-card,.roster-toolbar,.roster-welcome,.result-sem-modern,.college-subject-group,.subject-result-card{border:1px solid #f1e8e0;border-radius:23px;box-shadow:var(--shadow);background:#fff}
++.app-header{background:transparent}.app-header .overline{color:#e16e2d}.app-header h1{letter-spacing:-.045em}
++.accent-panel,.academic-sheet-hero{background:linear-gradient(127deg,#24292e 0%,#363438 62%,#614a3a 100%);color:#fff;border:0;border-radius:27px}
++.accent-panel .meter i,.meter.light i{background:#ff8e36}
++.action:not(.ghost):not(.white),.action.primary,.result-switch .
