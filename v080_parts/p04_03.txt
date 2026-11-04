@@ -1,0 +1,45 @@
+ptInterface public void importRoster(){main.post(()->showRosterImport());}
++        @JavascriptInterface public void importRoster(){main.post(()->showRosterImport(false));}
++        @JavascriptInterface public void extendRoster(){main.post(()->showRosterImport(true));}
++        @JavascriptInterface public void startFullCollection(String startDate,String optionalPassword){
++            main.post(()->MainActivity.this.startFullCollection(startDate,optionalPassword));
++        }
++        @JavascriptInterface public void cancelFullCollection(){main.post(()->MainActivity.this.cancelFullCollection());}
+         @JavascriptInterface public void selectRosterStudent(int index){main.post(()->chooseRosterStudent(index));}
+         @JavascriptInterface public void searchRosterStudents(String query){main.post(()->{String safe=query==null?"":query.substring(0,Math.min(80,query.length()));JSONObject found=rosterStore.search(safe,30);appView.evaluateJavascript("window.onRosterSearchResults("+found.toString()+");",null);});}
+         @JavascriptInterface public void requestRoster(){main.post(()->sendRoster("onRosterLoaded"));}
+@@ -495,6 +613,10 @@
+         if (!autoActive) return;
+         autoActive = false; autoBusy = false; autoStage = "ensure";
+         notifyApp(explanation, true);
++        if(collecting&&"attendance".equals(collectionStage)) {
++            collectionProgress("attendance","Attendance incomplete: "+explanation,false);
++            main.postDelayed(this::startCourseCollection,1000);
++        }
+         message(explanation);
+     }
+ 
+@@ -597,7 +719,11 @@
+         if(autoIndex>=autoWindows.size()) {
+             autoActive=false; autoBusy=false;
+             notifyApp("Sync completed: " + autoWindows.size() + " intervals",true);
+-            showApp();return;
++            if(collecting&&"attendance".equals(collectionStage)){
++                collectionProgress("attendance","Attendance synced across "+autoWindows.size()+" date windows",false);
++                main.postDelayed(this::startCourseCollection,650);
++            }else showApp();
++            return;
+         }
+         String[] dates = autoWindows.get(autoIndex);
+         JSONObject range=new JSONObject();
+@@ -697,8 +823,9 @@
+         else super.onBackPressed();
+     }
+     @Override protected void onDestroy() {
++        collecting=false;collectionSerial++;
+         autoActive=false;
+-        if(academics!=null)academics.stop();
++        if(academics!=null){academics.setSimTemporaryPassword("");academics.stop();}
+         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
+         appView.removeJavascriptInterface("Native");
+         appView.destroy();
