@@ -47,6 +47,18 @@ jobs:
           set -e
           for file in app/src/main/assets/*.js; do node --check "$file"; done
           for file in tests/*.js; do node "$file"; done
+      - name: Fix duplicate splash-layout variable in original source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build-input/AcademicKundli_v0.9.4/app/src/main/java/com/campus/simplus/MainActivity.java')
+          content = p.read_text()
+          old = 'LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,dp(49));cp.topMargin=dp(28);stack.addView(cancel,cp);'
+          new = 'LinearLayout.LayoutParams cancelParams=new LinearLayout.LayoutParams(-1,dp(49));cancelParams.topMargin=dp(28);stack.addView(cancel,cancelParams);'
+          assert content.count(old) == 1, 'Expected one splash variable to patch'
+          p.write_text(content.replace(old, new))
+          PY
       - name: Assemble Android debug APK
         working-directory: build-input/AcademicKundli_v0.9.4
         run: gradle --no-daemon :app:assembleDebug --stacktrace
