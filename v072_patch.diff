@@ -1,0 +1,287 @@
+--- a/app/src/main/java/com/campus/simplus/StudentRosterStore.java
++++ b/app/src/main/java/com/campus/simplus/StudentRosterStore.java
+@@ -47,7 +47,7 @@
+        "Correspondence Address (Parents)","Permanent Address (Parents)","Photo URL"};
+     static final String[] FIELDS={"name","roll","admission","father","dob","admissionYear","category",
+        "course","semester","session","correspondenceAddress","permanentAddress","photoUrl"};
+-    private static final int MAX_FILE=8*1024*1024,MAX_XML=12*1024*1024,MAX_TOTAL_XML=28*1024*1024,MAX_ROWS=2500;
++    private static final int MAX_FILE=96*1024*1024,MAX_XML=12*1024*1024,MAX_TOTAL_XML=28*1024*1024,MAX_ROWS=2500;
+     private final Context context;
+     private JSONArray roster=new JSONArray();
+     private int selected=-1;
+@@ -58,7 +58,8 @@
+         JSONObject out=new JSONObject();JSONArray list=new JSONArray();
+         try {
+             out.put("selected",selected);
+-            for(int i=0;i<roster.length();i++){
++            out.put("count",roster.length());
++            for(int i=0;i<Math.min(25,roster.length());i++){
+                 JSONObject row=roster.optJSONObject(i);if(row==null)continue;
+                 list.put(new JSONObject().put("index",i).put("name",row.optString("name"))
+                     .put("roll",row.optString("roll")).put("semester",row.optString("semester")));
+@@ -70,66 +71,34 @@
+     }
+     synchronized JSONObject choose(int index)throws Exception{
+         if(index<0||index>=roster.length())throw new IllegalArgumentException("Student does not exist");
+-        selected=index;save();return snapshot();
++        selected=index;context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",index).apply();return snapshot();
+     }
+     synchronized JSONObject importXlsx(Uri uri)throws Exception{
+-        if(uri==null)throw new IllegalArgumentException("Choose an .xlsx workbook");
+-        long bytes=0;
+-        // Cloud document providers may allow openInputStream while rejecting
+-        // openFileDescriptor. A failed size probe must never block a valid file.
+-        try (android.os.ParcelFileDescriptor fd=context.getContentResolver().openFileDescriptor(uri,"r")) {
+-            if(fd!=null&&fd.getStatSize()>MAX_FILE)throw new IllegalArgumentException("Workbook exceeds 8 MB limit");
+-        } catch (IllegalArgumentException e) {
+-            throw e;
+-        } catch (Exception unsupportedProvider) {
+-            // The bounded ZIP/XML reader below remains authoritative.
+-        }
+-        Map<String,byte[]> xml=new HashMap<>();int accumulated=0;
+-        try(InputStream input=context.getContentResolver().openInputStream(uri)){
+-            if(input==null)throw new IllegalArgumentException("Cannot open workbook");
+-            try(ZipInputStream zip=new ZipInputStream(new java.io.BufferedInputStream(input))){
+-                ZipEntry entry;int count=0;
+-                while((entry=zip.getNextEntry())!=null){
+-                    if(++count>1500)throw new IllegalArgumentException("Workbook has too many ZIP entries");
+-                    String name=entry.getName();
+-                    boolean wanted=name.equals("xl/sharedStrings.xml")||name.equals("xl/workbook.xml")
+-                        ||name.matches("xl/worksheets/sheet[0-9]+\\.xml");
+-                    if(!wanted){zip.closeEntry();continue;}
+-                    ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int got;
+-                    while((got=zip.read(buffer))!=-1){
+-                        bytes+=got;accumulated+=got;
+-                        if(bytes>MAX_TOTAL_XML||out.size()+got>MAX_XML)
+-                            throw new IllegalArgumentException("Workbook expands beyond safety limits");
+-                        out.write(buffer,0,got);
+-                    }
+-                    xml.put(name,out.toByteArray());zip.closeEntry();
+-                }
+-            }
+-        }
+-        if(xml.isEmpty())throw new IllegalArgumentException("Not a readable .xlsx workbook");
+-        ArrayList<String> strings=readShared(xml.get("xl/sharedStrings.xml"));
+-        boolean date1904=readDateSystem(xml.get("xl/workbook.xml"));
+-        ArrayList<String> sheets=new ArrayList<>();
+-        for(String name:xml.keySet())if(name.matches("xl/worksheets/sheet[0-9]+\\.xml"))sheets.add(name);
+-        java.util.Collections.sort(sheets,(a,b)->Integer.compare(sheetNumber(a),sheetNumber(b)));
+-        String problem="Expected 13 spreadsheet headings in the specified order";
+-        for(String name:sheets){
+-            try{
+-                JSONArray entries=readSheet(xml.get(name),strings,date1904);
+-                if(entries.length()==0)throw new IllegalArgumentException("No students found below the header row");
+-                JSONArray previous=roster;
+-                int previousSelection=selected;
+-                roster=entries;
+-                selected=0;
+-                try {save();}catch(Exception persistError){
+-                    roster=previous;
+-                    selected=previousSelection;
+-                    throw new IllegalArgumentException("Could not securely save students: "+persistError.getClass().getSimpleName());
+-                }
+-                return snapshot();
+-            }catch(IllegalArgumentException e){problem=e.getMessage();}
+-        }
+-        throw new IllegalArgumentException(problem);
++        JSONArray entries=LargeXlsxReader.load(context,uri);
++        if(entries.length()==0)throw new IllegalArgumentException("No student records found");
++        JSONArray previous=roster;int previousSelection=selected;
++        roster=entries;selected=0;
++        try {save();}catch(Exception e){
++            roster=previous;selected=previousSelection;
++            throw new IllegalArgumentException("Could not save imported students securely: "+e.getMessage());
++        }
++        context.getSharedPreferences("simplus-roster-ui",0).edit().putInt("selected",0).apply();
++        return snapshot();
++    }
++    synchronized JSONObject search(String q,int limit){
++        String needle=q==null?"":q.trim().toLowerCase(Locale.ROOT);
++        int take=Math.min(40,Math.max(1,limit));int matches=0;
++        JSONArray list=new JSONArray();
++        for(int i=0;i<roster.length();i++){
++            JSONObject person=roster.optJSONObject(i);if(person==null)continue;
++            String name=person.optString("name"),roll=person.optString("roll");
++            if(!needle.isEmpty()&&!name.toLowerCase(Locale.ROOT).contains(needle)&&!roll.toLowerCase(Locale.ROOT).contains(needle))continue;
++            matches++;
++            if(list.length()<take)try{list.put(new JSONObject().put("index",i).put("name",name).put("roll",roll));}catch(Exception ignored){}
++        }
++        JSONObject result=new JSONObject();
++        try{result.put("query",q==null?"":q);result.put("count",matches);result.put("matches",list);result.put("total",roster.length());}catch(Exception ignored){}
++        return result;
+     }
+     private static int sheetNumber(String value){String n=value.replaceAll("\\D+"," ").trim();try{return Integer.parseInt(n);}catch(Exception ignored){return Integer.MAX_VALUE;}}
+     private static Document document(byte[] raw)throws Exception{
+@@ -307,7 +276,7 @@
+             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,secret(),new GCMParameterSpec(128,nonce));
+             byte[] plain=cipher.doFinal(full,12,full.length-12);
+             JSONObject obj=new JSONObject(new String(plain,StandardCharsets.UTF_8));
+-            roster=obj.getJSONArray("students");selected=obj.optInt("selected",0);
++            roster=obj.getJSONArray("students");selected=context.getSharedPreferences("simplus-roster-ui",0).getInt("selected",obj.optInt("selected",0));
+             if(selected>=roster.length()||selected<0)selected=roster.length()>0?0:-1;
+         }catch(Exception ignored){roster=new JSONArray();selected=-1;}
+     }
+--- a/app/src/main/java/com/campus/simplus/MainActivity.java
++++ b/app/src/main/java/com/campus/simplus/MainActivity.java
+@@ -419,6 +419,7 @@
+     private final class UiBridge {
+         @JavascriptInterface public void importRoster(){main.post(()->showRosterImport());}
+         @JavascriptInterface public void selectRosterStudent(int index){main.post(()->chooseRosterStudent(index));}
++        @JavascriptInterface public void searchRosterStudents(String query){main.post(()->{String safe=query==null?"":query.substring(0,Math.min(80,query.length()));JSONObject found=rosterStore.search(safe,30);appView.evaluateJavascript("window.onRosterSearchResults("+found.toString()+");",null);});}
+         @JavascriptInterface public void requestRoster(){main.post(()->sendRoster("onRosterLoaded"));}
+         @JavascriptInterface public void showErp() { main.post(() -> MainActivity.this.showErp()); }
+         @JavascriptInterface public void openCollegeResult(){main.post(() -> academics.openCollegeResult());}
+--- a/app/src/main/assets/app.js
++++ b/app/src/main/assets/app.js
+@@ -4,6 +4,7 @@
+ let activeAttendanceKey=STORE,activeResultsKey=EXAMS;
+ let rosterReady=false,rosterStudents=[],rosterSelected=-1,rosterProfile=null;
+ let rosterImporting=false,rosterImportError='',rosterImportNote='';
++let rosterCount=0,studentSearchOpen=false,studentQuery='',studentMatches=[],studentMatchCount=0,studentSearchTimer=null;
+ const now=()=>E.iso(new Date());
+ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const pct=(n,places=1)=>Number.isFinite(n)?Number(n).toFixed(places)+'%':'—';
+@@ -35,6 +36,7 @@
+ }
+ function consumeRoster(snapshot){
+  const items=Array.isArray(snapshot.students)?snapshot.students:[];
++ rosterCount=Number(snapshot.count)||items.length;
+  const person=snapshot.student||null,idx=Number(snapshot.selected);
+  const changed=person&&(rosterSelected!==idx||!rosterProfile||rosterProfile.roll!==person.roll);
+  if(changed){
+@@ -51,7 +53,8 @@
+  }else if(person){
+    state.profile={...state.profile,...person,program:person.course||state.profile.program};
+  }
+- rosterStudents=items;rosterSelected=items.length&&idx>=0?idx:-1;rosterProfile=person;
++ rosterStudents=items;rosterSelected=person&&idx>=0?idx:-1;rosterProfile=person;
++ if(changed){studentSearchOpen=false;studentQuery='';studentMatches=[];}
+  rosterReady=true;
+  if(rosterSelected>=0)page='home';
+  render();
+@@ -61,10 +64,27 @@
+   renderRosterGate();
+   if(!native('importRoster'))window.onRosterImportError('Android file picker is not available.');
+ };
+-window.chooseStudent=()=>{const el=document.getElementById('activeStudent');if(!el)return;native('selectRosterStudent',Number(el.value));};
++window.chooseStudent=index=>{if(!Number.isInteger(Number(index)))return;native('selectRosterStudent',Number(index));};
++window.toggleStudentSearch=()=>{studentSearchOpen=!studentSearchOpen;studentQuery='';studentMatches=[];renderStudentPicker();if(studentSearchOpen){document.getElementById('studentSearchInput')?.focus();window.queryStudents('');}};
++window.queryStudents=value=>{
++ studentQuery=String(value||'').slice(0,80);if(studentSearchTimer)clearTimeout(studentSearchTimer);
++ studentSearchTimer=setTimeout(()=>{if(!native('searchRosterStudents',studentQuery)){
++  window.onRosterSearchResults({query:studentQuery,matches:rosterStudents.filter(x=>[x.name,x.roll].some(t=>String(t||'').toLowerCase().includes(studentQuery.toLowerCase()))).slice(0,30),count:rosterStudents.length});
++ }},130);
++};
++window.onRosterSearchResults=payload=>{
++ if(!studentSearchOpen||String(payload.query||'')!==studentQuery)return;
++ studentMatches=Array.isArray(payload.matches)?payload.matches:[];studentMatchCount=Number(payload.count)||0;
++ updateStudentSearchResults();
++};
++function updateStudentSearchResults(){
++ const out=document.getElementById('studentSearchResults');if(!out)return;
++ out.innerHTML=`<div class="student-search-meta">${studentMatchCount} match${studentMatchCount===1?'':'es'}${studentMatchCount>studentMatches.length?` · Showing first ${studentMatches.length}`:''}</div>${studentMatches.length?studentMatches.map(s=>`<button type="button" class="student-search-row" onclick="chooseStudent(${Number(s.index)})"><strong>${esc(s.name)} <span>(${esc(s.roll)})</span></strong><small>University roll number ${esc(s.roll)}</small></button>`).join(''):'<div class="student-search-empty">No students match this search.</div>'}`;
++}
++
+ window.onRosterLoaded=consumeRoster;
+ window.onRosterImportStarted=()=>{rosterImporting=true;rosterImportError='';rosterImportNote='Reading and validating your workbook…';renderRosterGate();};
+-window.onRosterImported=s=>{rosterImporting=false;rosterImportError='';rosterImportNote='';consumeRoster(s);toast(`Imported ${rosterStudents.length} student records successfully.`);};
++window.onRosterImported=s=>{rosterImporting=false;rosterImportError='';rosterImportNote='';consumeRoster(s);toast(`Imported ${rosterCount} student records successfully.`);};
+ window.onRosterSelected=s=>{consumeRoster(s);toast('Active student updated. Authenticate this student before syncing ERP.');};
+ window.onRosterImportError=reason=>{
+   rosterImporting=false;rosterImportNote='';
+@@ -83,8 +103,9 @@
+ function renderStudentPicker(){
+  const banner=document.getElementById('studentBanner');if(!banner)return;
+  if(!rosterReady||!rosterProfile){banner.innerHTML='';return;}
+- const opts=rosterStudents.map(x=>`<option value="${x.index}" ${x.index===rosterSelected?'selected':''}>${esc(x.name)} · ${esc(x.roll)}</option>`).join('');
+- banner.innerHTML=`<div class="roster-toolbar"><div><span class="overline">ACTIVE STUDENT</span><div class="roster-selector"><select id="activeStudent" aria-label="Select student" onchange="chooseStudent()">${opts}</select></div></div><button class="action ghost small" onclick="importStudentExcel()">Replace Excel</button></div>`;
++ const name=rosterProfile.name||'Student',roll=rosterProfile.roll||'';
++ banner.innerHTML=`<div class="roster-toolbar"><div class="roster-current"><span class="overline">ACTIVE STUDENT · ${rosterCount.toLocaleString('en-IN')} IMPORTED</span><strong>${esc(name)} <span>(${esc(roll)})</span></strong></div><div class="roster-tools"><button type="button" class="action small" onclick="toggleStudentSearch()" aria-expanded="${studentSearchOpen}">${studentSearchOpen?'Close search':'Search students'}</button><button class="action ghost small" onclick="importStudentExcel()">Replace Excel</button></div></div>${studentSearchOpen?`<div class="student-search-box"><label for="studentSearchInput">Search by name or university roll number</label><input id="studentSearchInput" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="e.g. Joe" value="${esc(studentQuery)}" oninput="queryStudents(this.value)"><div id="studentSearchResults" class="student-search-results" role="listbox"><div class="student-search-meta">Searching…</div></div></div>`:''}`;
++ if(studentSearchOpen&&studentMatches.length)updateStudentSearchResults();
+ }
+ 
+ function toast(message){const t=document.getElementById('toast');t.textContent=String(message);t.classList.remove('hidden');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>t.classList.add('hidden'),4100);}
+@@ -122,7 +143,7 @@
+ function predictionAttendance(){const s=stats();const p=s.analysis,official=officialPct();const canPredict=p&&s.total>0&&(!state.windows.length||state.windows.every(w=>w.done));return `<div class="panel"><div class="row between"><h2 class="section-title">Attendance predictor</h2><span class="badge purple">${state.target}% goal</span></div><p class="subtle small" style="line-height:1.6">Based only on complete, individually marked P/A lecture records, not percentages. Official rules may differ.</p>${canPredict?`<div class="grid g2" style="margin-top:18px"><div class="course-info"><span>Extra classes you can miss</span><strong style="font-size:29px">${num(p.bunk)}</strong></div><div class="course-info"><span>Classes to attend consecutively</span><strong style="font-size:29px">${p.need===null?'Not attainable at 100%':num(p.need)}</strong></div></div><div class="info-box" style="margin-top:14px">Computed from ${num(s.present)} present / ${num(s.total)} marked classes. ${state.semesterPct!==null?'Official ERP percentage: '+pct(official)+'.':''} Verify that all semester date windows have been retrieved.</div>`:empty('◎','Prediction needs complete class counts','SIM reports percentages in some views. Sync the full Date Wise attendance first; no class counts are invented.','Fetch semester','setAttTab(\'sync\')')}</div><div class="panel"><h2 class="section-title">Target control</h2><div class="fields" style="margin-top:14px"><label class="field">Minimum attendance (%)<input id="newTarget" type="number" min="1" max="100" value="${state.target}"></label><div class="center">${button('Save target','saveTarget()')}</div></div></div>`;}
+ window.saveTarget=()=>{const v=Number(document.getElementById('newTarget')?.value);if(!Number.isFinite(v)||v<1||v>100)return toast('Target must be 1–100%.');state.target=v;persist();render();toast('Target saved');};
+ function syncAttendanceView(){const windows=state.windows||[],completed=windows.filter(w=>w.done).length;return `<div class="panel"><h2 class="section-title">Auto-sync real attendance</h2><p class="subtle small" style="line-height:1.6">Log into the original SIM website once. The app requests each supported 30-day window, reads returned lecture rows, and keeps your session on this device.</p><div class="fields" style="margin:17px 0"><label class="field">From <input type="date" id="attendanceFrom" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">To <input type="date" id="attendanceTo" value="${esc(state.rangeEnd||now())}" max="${now()}"></label></div><div class="actions">${button(icon('refresh')+' Start full sync','syncAttendance()')}${button('Open college ERP','openCollege()','ghost')}</div>${windows.length?`<div class="info-box" style="margin-top:16px">${completed}/${windows.length} date windows completed. Missing windows are not counted as fetched data.</div>`:''}</div><div class="panel"><h2 class="section-title">Import details</h2><div class="list"><div class="list-item"><div><strong>Last ERP refresh</strong><div class="meta">Actual records only</div></div><div class="right">${lastSyncLabel()}</div></div><div class="list-item"><div><strong>Fetched lecture entries</strong><div class="meta">P / A / NM</div></div><div class="right numbers">${state.records.length}</div></div><div class="list-item"><div><strong>30-day intervals</strong><div class="meta">Most recent requested range</div></div><div class="right numbers">${completed}/${windows.length}</div></div></div></div>`;}
+-window.syncAttendance=()=>{let f=document.getElementById('attendanceFrom')?.value||state.start,t=document.getElementById('attendanceTo')?.value||state.rangeEnd||now();if(!f||f>t||t>now())return toast('Set a valid semester date range in Profile first.');let parts;try{parts=E.rangeParts(f,t);}catch(e){return toast(e.message);}const old=state.windows||[];state.windows=parts.map(p=>({...p,done:!!old.find(w=>w.from===p.from&&w.to===p.to&&w.done)}));state.rangeEnd=t;persist();if(native('startAutoSync',f,t)){document.getElementById('syncBanner').classList.remove('hidden');document.getElementById('syncMessage').textContent='Starting college ERP sync…';}else toast('Auto-sync is only available in the Android app.');};
++window.syncAttendance=()=>{let f=E.parseDate(document.getElementById('attendanceFrom')?.value||state.start),t=E.parseDate(document.getElementById('attendanceTo')?.value||state.rangeEnd||now());if(!f||!t)return toast('Choose both From and To dates.');if(f>t)return toast('From date must be before To date.');if(t>now())return toast('The end date cannot be in the future.');let parts;try{parts=E.rangeParts(f,t);}catch(e){return toast(e.message);}const old=state.windows||[];state.windows=parts.map(p=>({...p,done:!!old.find(w=>w.from===p.from&&w.to===p.to&&w.done)}));state.rangeEnd=t;persist();if(native('startAutoSync',f,t)){document.getElementById('syncBanner').classList.remove('hidden');document.getElementById('syncMessage').textContent='Starting college ERP sync…';}else toast('Auto-sync is only available in the Android app.');};
+ window.cancelSync=()=>{native('stopAutoSync');document.getElementById('syncBanner').classList.add('hidden');};
+ window.openToday=()=>native('showToday');
+ window.openCollege=()=>native('showErp');
+@@ -228,9 +249,16 @@
+ window.downloadReport=()=>{if(!rosterProfile)return toast('Import an Excel and select a student before exporting.');const raw=JSON.stringify(reportData());if(!native('exportCandidateReport',raw))toast('PDF export requires the updated Android app.');};
+ function profileView(){const p=state.profile;
+ const items=[['Full name',p.name],['University roll no.',p.roll],['Admission no.',p.admission],['Father’s name',p.father],['Date of birth',p.dob],['Year of admission',p.admissionYear],['Category',p.category],['Course',p.course||p.program],['Current semester',p.semester],['Session',p.session],['Correspondence address (parents)',p.correspondenceAddress],['Permanent address (parents)',p.permanentAddress],['Photo URL',p.photoUrl]];
+-const photo=String(p.photoUrl||'');let safePhoto='';try{const url=new URL(photo);if(url.protocol==='https:')safePhoto=url.href;}catch(e){}
+-return `<div class="stack"><div class="panel"><div class="row align-start" style="gap:16px;margin-bottom:18px"><div class="roster-avatar">${safePhoto?`<img src="${esc(safePhoto)}" alt="Student portrait" loading="lazy" onerror="this.remove()">`:esc((p.name||'S')[0])}</div><div><h2 style="margin:0 0 6px">${esc(p.name||'Student profile')}</h2><div class="subtle small">${esc(p.roll||'No roll number')}</div><div class="badge" style="margin-top:8px">${esc(p.semester||'Semester not set')}</div></div></div><div class="course-grid">${items.map(([label,val])=>`<div class="course-info"><span>${esc(label)}</span><strong>${esc(val||'Not supplied')}</strong></div>`).join('')}</div><div class="actions" style="margin-top:20px">${button('Generate comprehensive PDF','downloadReport()')}${button('Re-import Excel','importStudentExcel()','ghost')}</div><div class="tiny-line">Student details come from your encrypted Excel roster. Photo loading contacts its host only when displayed or exported. SIM/AKTU marks are captured separately from official authenticated pages.</div></div><div class="panel"><h2 class="section-title">Attendance preferences</h2><div class="fields" style="margin:17px 0"><label class="field">Semester start<input type="date" id="semesterStart" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">Attendance target (%)<input type="number" id="goalTarget" min="1" max="100" value="${state.target}"></label></div>${button('Save preferences','savePreferences()')}</div><div class="panel"><h2 class="section-title">Official academic portals</h2><p class="tiny-line">Selecting a different student does not log into their ERP account. Use their own authorized SIM login and CAPTCHA. AKTU roll and DOB are prepared from the selected roster row.</p><div class="actions">${button('SIM ERP login','openCollege()')}${button('AKTU One View','openAktu()','ghost')}</div><div class="actions" style="margin-top:15px">${button('Export attendance backup','backupLocal()','ghost')}${button('Restore old backup','restoreLocal()','ghost')}${button('Clear cached results','clearResults()','ghost')}</div></div></div>`;}
+-window.savePreferences=()=>{const s=document.getElementById('semesterStart').value,t=Number(document.getElementById('goalTarget').value);if(!s||s>now()||!Number.isFinite(t)||t<1||t>100)return toast('Set a valid semester start date and a 1–100% target.');state.start=s;state.target=t;state.setup=true;persist();render();toast('Preferences saved');};
++const photo=String(p.photoUrl||'');let safePhoto='';try{const url=new URL(photo);if(url.protocol==='https:'&&url.hostname)safePhoto=url.href;}catch(e){}
++return `<div class="stack"><div class="panel"><div class="row align-start" style="gap:16px;margin-bottom:18px"><div class="roster-avatar">${safePhoto?`<img src="${esc(safePhoto)}" alt="Student portrait" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span class="photo-fallback" style="display:none">PHOTO<br>UNAVAILABLE</span>`:'<span class="photo-fallback">PHOTO URL<br>MISSING</span>'}</div><div><h2 style="margin:0 0 6px">${esc(p.name||'Student profile')}</h2><div class="subtle small">${esc(p.roll||'No roll number')}</div><div class="badge" style="margin-top:8px">${esc(p.semester||'Semester not set')}</div></div></div><div class="course-grid">${items.map(([label,val])=>`<div class="course-info"><span>${esc(label)}</span><strong>${esc(val||'Not supplied')}</strong></div>`).join('')}</div><div class="actions" style="margin-top:20px">${button('Generate comprehensive PDF','downloadReport()')}${button('Re-import Excel','importStudentExcel()','ghost')}</div><div class="tiny-line">Student details come from your encrypted Excel roster. Photo loading contacts its host only when displayed or exported. SIM/AKTU marks are captured separately from official authenticated pages.</div></div><div class="panel"><h2 class="section-title">Attendance preferences</h2><div class="fields" style="margin:17px 0"><label class="field">Semester start<input type="date" id="semesterStart" value="${esc(state.start||'')}" max="${now()}"></label><label class="field">Attendance target (%)<input type="number" id="goalTarget" min="1" max="100" value="${state.target}"></label></div>${button('Save preferences','savePreferences()')}</div><div class="panel"><h2 class="section-title">Official academic portals</h2><p class="tiny-line">Selecting a different student does not log into their ERP account. Use their own authorized SIM login and CAPTCHA. AKTU roll and DOB are prepared from the selected roster row.</p><div class="actions">${button('SIM ERP login','openCollege()')}${button('AKTU One View','openAktu()','ghost')}</div><div class="actions" style="margin-top:15px">${button('Export attendance backup','backupLocal()','ghost')}${button('Restore old backup','restoreLocal()','ghost')}${button('Clear cached results','clearResults()','ghost')}</div></div></div>`;}
++window.savePreferences=()=>{
++ const raw=document.getElementById('semesterStart')?.value||'',s=E.parseDate(raw);
++ const t=Number(document.getElementById('goalTarget')?.value);
++ if(!s)return toast('Choose the semester start date using the calendar.');
++ if(s>now())return toast('Semester start cannot be after today.');
++ if(!Number.isFinite(t)||t<1||t>100)return toast('Attendance target must be from 1% to 100%.');
++ state.start=s;state.target=t;state.setup=true;persist();render();toast('Preferences saved');
++};
+ window.backupLocal=()=>{const raw=JSON.stringify({...state,format:'SIM+1'},null,2);if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(raw).then(()=>toast('Backup copied to clipboard')).catch(()=>prompt('Copy this local backup:',raw));else prompt('Copy this local backup:',raw);};
+ window.restoreLocal=()=>{const raw=prompt('Paste the SIM+ attendance JSON from your previous app:');if(!raw)return;try{const obj=JSON.parse(raw);if(obj.format!=='SIM+1'||!Array.isArray(obj.records)||!Array.isArray(obj.subjects))throw Error();if(!confirm('Replace this app’s attendance cache with the backup? Exam results remain unchanged.'))return;for(const k of ['start','target','setup','dark','subjects','records','windows','lastSync','lastReport','selectedSubject','rangeEnd','semesterPct','monthly','subjectPcts'])if(Object.hasOwn(obj,k))state[k]=obj[k];persist();render();toast('Previous SIM+ attendance restored');}catch(e){toast('Unrecognized SIM+ backup');}};
+ window.clearResults=()=>{if(!confirm('Remove all locally saved exam results?'))return;resultState.records=[];resultState.lastSync='';persistResults();render();toast('Saved results cleared');};
+--- a/app/src/main/assets/engine.js
++++ b/app/src/main/assets/engine.js
+@@ -18,9 +18,12 @@
+   }
+   const valid=(d,y,m,day)=>d.getFullYear()===y&&d.getMonth()+1===m&&d.getDate()===day;
+   function rangeParts(start,end,maxDays=30){
+-    if(!start||!end||start>end) throw new Error('Select a valid start and end date.');
+-    const a=new Date(start+'T12:00:00'),z=new Date(end+'T12:00:00');
+-    if(isNaN(a.getTime())||isNaN(z.getTime()))throw new Error('Invalid date.');
++    if(!start||!end)throw new Error('Select both dates before syncing.');
++    const first=parseDate(start),last=parseDate(end);
++    if(!first||!last)throw new Error('Choose dates from the calendar.');
++    const localDate=isoDay=>{const [y,m,d]=isoDay.split('-').map(Number);return new Date(y,m-1,d,12,0,0,0);};
++    const a=localDate(first),z=localDate(last);
++    if(isNaN(a.getTime())||isNaN(z.getTime())||a>z)throw new Error('Select a valid start and end date.');
+     const parts=[];
+     for(let p=new Date(a);p<=z;p.setDate(p.getDate()+maxDays)){
+       const last=new Date(p);last.setDate(last.getDate()+maxDays-1);
+--- a/app/src/main/assets/style.css
++++ b/app/src/main/assets/style.css
+@@ -95,3 +95,21 @@
+ .roster-import-note{border-radius:13px;padding:12px 14px;margin:13px 0;background:var(--indigo-soft);color:#4a55af;font-weight:650;font-size:12px}
+ .roster-welcome button:disabled{cursor:wait;opacity:.6}
+ .darkmode .roster-import-error{background:#512634;color:#ffd5da;border-color:#bf677a}
++
++/* In-app searchable student picker, bounded at 30 visible matches. */
++.roster-current{min-width:0;display:flex;flex-direction:column;gap:3px}
++.roster-current strong{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
++.roster-current strong span{color:var(--muted,#64748b);font-weight:650;font-size:13px}
++.roster-tools{display:flex;gap:8px;flex-wrap:wrap}
++.student-search-box{margin-top:9px;border:1px solid var(--border,#e4e8f2);background:var(--surface,#fff);padding:15px;border-radius:17px;box-shadow:0 12px 30px rgba(24,35,74,.06)}
++.student-search-box label{font-size:12px;font-weight:750;color:var(--muted,#64748b);display:block;margin:0 0 7px}
++.student-search-box input{width:100%;border:1px solid #aab6cb;border-radius:12px;padding:12px 14px;font-size:16px;background:var(--surface,#fff);color:var(--text,#18213b);outline-offset:2px}
++.student-search-results{margin-top:9px;max-height:310px;overflow-y:auto;overscroll-behavior:contain}
++.student-search-meta,.student-search-empty{font-size:12px;color:var(--muted,#64748b);padding:9px}
++.student-search-row{display:flex;flex-direction:column;text-align:left;width:100%;border:0;border-bottom:1px solid var(--border,#e4e8f2);padding:11px 9px;background:transparent;color:var(--text,#18213b);gap:4px;cursor:pointer;border-radius:8px}
++.student-search-row:active,.student-search-row:hover{background:rgba(105,111,210,.1)}
++.student-search-row strong{font-size:14px}.student-search-row strong span{color:var(--muted,#64748b)}
++.student-search-row small{font-size:11px;color:var(--muted,#64748b)}
++.roster-avatar .photo-fallback{font-size:10px;line-height:1.4;text-align:center;letter-spacing:.06em;font-weight:800;padding:5px}
++.darkmode .student-search-box,.darkmode .student-search-box input{background:#18223a;color:#f4f5ff}
++@media(max-width:520px){.roster-toolbar{gap:10px}.roster-tools{width:100%}}
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -7,8 +7,8 @@
+         applicationId 'com.campus.simplus'
+         minSdk 24
+         targetSdk 35
+-        versionCode 10
+-        versionName '0.7.1'
++        versionCode 11
++        versionName '0.7.2'
+     }
+     buildTypes {
+         release { minifyEnabled false }
