@@ -1,0 +1,61 @@
+--- a/app/src/main/java/com/campus/simplus/MainActivity.java
++++ b/app/src/main/java/com/campus/simplus/MainActivity.java
+@@ -47,6 +47,13 @@
+     private static final String LOGIN = "https://glbg.servergi.com:8072/ISIMGLB/Login";
+     private static final String ERP = "https://glbg.servergi.com:8072/ISIMGLB/home";
+     private static final String TODAY = "https://glbg.servergi.com:8072/ISIMGLB/Student/TodayAttendence";
++    private static final String STUDENT_OFFICIAL="https://glbg.servergi.com:8072/ISIMGLB/Student/StudentOfficial";
++    private boolean importExtend=false;
++    private boolean collecting=false;
++    private String collectionStage="idle";
++    private int collectionSerial=0;
++    private android.widget.ProgressBar browserProgress;
++    private String collectionAttendanceDate="";
+     private String pendingFrom = null, pendingTo = null;
+     // A protected college route is never requested until the official Login
+     // screen has produced a verified authenticated college page.
+@@ -111,6 +118,10 @@
+         back.setAllCaps(false);
+         back.setOnClickListener(v -> showApp());
+         toolbar.addView(back, new LinearLayout.LayoutParams(dp(90), dp(48)));
++        browserProgress=new android.widget.ProgressBar(this);
++        browserProgress.setIndeterminate(true);
++        browserProgress.setVisibility(View.GONE);
++        toolbar.addView(browserProgress,new LinearLayout.LayoutParams(dp(24),dp(48)));
+         browserTitle = new TextView(this);
+         browserTitle.setText("Official SIM ERP");
+         browserTitle.setTextColor(Color.WHITE);
+@@ -120,7 +131,7 @@
+         Button cancelSync = new Button(this);
+         cancelSync.setText("Stop");
+         cancelSync.setAllCaps(false);
+-        cancelSync.setOnClickListener(v -> {stopAuto("Sync stopped; saved records kept.");if(academics!=null)academics.stopScan("Exam scan stopped; previously captured results retained.");});
++        cancelSync.setOnClickListener(v -> {cancelFullCollection();stopAuto("Sync stopped; saved records kept.");if(academics!=null)academics.stopScan("Exam scan stopped; previously captured results retained.");});
+         toolbar.addView(cancelSync, new LinearLayout.LayoutParams(dp(65), dp(48)));
+         Button capture = new Button(this);
+         capture.setText("Capture");
+@@ -168,7 +179,8 @@
+                 super.onPageStarted(view,url,icon);
+             }
+             @Override public void onPageFinished(WebView view, String url) {
+-                browserTitle.setText(url.contains("ExamResult") ? "College exam results" : (url.contains("Course") ? "Academic profile" : (url.contains("aktu.ac.in") ? "AKTU One View" : (url.contains("TodayAttendence") ? "Today\u0027s Attendance" : "Official SIM ERP"))));
++                if(collecting)browserTitle.setText("Collecting: "+collectionStage.replace('-', ' '));
++                else browserTitle.setText(url.contains("ExamResult") ? "College exam results" : (url.contains("Course") ? "Academic profile" : (url.contains("aktu.ac.in") ? "AKTU One View" : (url.contains("TodayAttendence") ? "Today\u0027s Attendance" : "Official SIM ERP"))));
+                 Uri uri = Uri.parse(url);
+                 if (AcademicFeatures.isCollege(uri)) {
+                     if (academics != null) academics.onPageFinished(url);
+@@ -307,6 +319,28 @@
+                     prefillDates(pendingFrom,pendingTo);
+                 }
+                 if (autoActive) scheduleAuto(900);
++                if (collecting&&"course".equals(collectionStage)&&loadedUrl.toLowerCase(Locale.ROOT).contains("/course")) {
++                    collectionStage="course-reading";
++                    int serial=collectionSerial;
++                    // AcademicFeatures auto-reads Course on page finished; preserve
++                    // that WebView long enough for the authenticated capture.
++                    main.postDelayed(()->{
++                        if(collecting&&serial==collectionSerial&&"course-reading".equals(collectionStage))
++                            startOfficialCollection();
++                    },1950);
++                }
++                if (collecting&&"official".equals(collectionStage)&&loadedUrl.toLowerCase(Local
