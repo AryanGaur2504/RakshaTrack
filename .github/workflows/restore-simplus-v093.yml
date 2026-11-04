@@ -107,6 +107,29 @@ jobs:
           cp /tmp/v093/aktu_extension_capture.js app/src/main/assets/aktu_extension_capture.js
           grep -F "versionName '0.9.3'" app/build.gradle
           node --check app/src/main/assets/aktu_extension_capture.js
+      - name: Apply exact user-supplied v0.9.3 source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet brotli
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, brotli, io, tarfile
+          encoded=Path("restore_input/v093_exact_overrides.br.b64").read_text().strip()
+          payload=brotli.decompress(base64.b64decode(encoded,validate=True))
+          allowed={"app/src/main/java/com/campus/simplus/LargeXlsxReader.java","tests/aktu-fill-regression.test.js","tests/exams.test.js"}
+          with tarfile.open(fileobj=io.BytesIO(payload),mode="r:") as tf:
+              members=tf.getmembers()
+              assert set(m.name for m in members)==allowed
+              for m in members:
+                  assert m.isfile()
+                  target=Path(m.name)
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  target.write_bytes(tf.extractfile(m).read())
+          for p in Path("app").rglob("*.orig"):
+              p.unlink()
+          print("Restored exact source overrides and removed patch backups")
+          PY
       - name: Compare restored app with user's uploaded v0.9.3 source
         shell: bash
         run: |
