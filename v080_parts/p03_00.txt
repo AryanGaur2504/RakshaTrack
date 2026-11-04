@@ -1,0 +1,68 @@
+--- a/app/src/main/java/com/campus/simplus/AcademicFeatures.java
++++ b/app/src/main/java/com/campus/simplus/AcademicFeatures.java
+@@ -47,6 +47,15 @@
+     private String importedRoll="";
+     private String importedAdmission="";
+     private int simFillToken=0;
++    private String simTemporaryPassword=""; // one authorized login only; never persisted
++    private java.util.function.Consumer<String> scanCompletion;
++    private Runnable aktuCaptured;
++    void setSimTemporaryPassword(String value){
++        simTemporaryPassword=value==null?"":value.substring(0,Math.min(100,value.length()));
++        if(route(current(),"/Login"))scheduleSimFill();
++    }
++    void setScanCompletion(java.util.function.Consumer<String> listener){scanCompletion=listener;}
++    void setAktuCaptured(Runnable callback){aktuCaptured=callback;}
+     private Bitmap cachedProfilePhoto;
+     private String cachedProfilePhotoUrl="";
+     private int photoCacheGeneration=0;
+@@ -96,6 +105,8 @@
+         aktuWatchToken++;aktuFillToken++;lastAktuCaptureSignature="";
+         aktRoll = student==null?"":student.optString("roll","").replaceAll("[^0-9]","");
+         importedAdmission=student==null?"":student.optString("admission","").trim();
++        simTemporaryPassword="";
++        scanCompletion=null;aktuCaptured=null;
+         clearPhotoCache();
+         simFillToken++;
+         importedRoll=aktRoll;
+@@ -190,6 +201,27 @@
+             toast("Result parser is unavailable");if(complete!=null)complete.accept(false);
+         }
+     }
++    /** Read the first-party StudentOfficial page only after authenticated login.
++     * Exports the displayed group name under the friendly label Section :- . */
++    void captureOfficialSection(java.util.function.Consumer<Boolean> complete){
++        Uri url=current();
++        if(!route(url,"/StudentOfficial")){if(complete!=null)complete.accept(false);return;}
++        try{erp.evaluateJavascript(asset("student_official.js"),raw->{
++            boolean ok=false;
++            try{
++                JSONObject result=new JSONObject(decode(raw));
++                String section=result.optString("section","").trim();
++                String actualRoll=result.optString("roll","").replaceAll("[^0-9]","");
++                if(!actualRoll.isEmpty()&&!importedRoll.isEmpty()&&!actualRoll.equals(importedRoll))
++                    throw new Exception("StudentOfficial is for another student");
++                if(!section.isEmpty()){
++                    app.evaluateJavascript("window.onOfficialSection("+result.toString()+");",null);
++                    ok=true;
++                }
++            }catch(Exception ignored){}
++            if(complete!=null)complete.accept(ok);
++        });}catch(Exception ex){if(complete!=null)complete.accept(false);}
++    }
+     void captureStudentProfile(){Uri uri=current();if(!isCollege(uri)||!(route(uri,"/Course")||route(uri,"Attend"))){toast("Open SIM Course or Attendance to read the profile");return;}
+         try{erp.evaluateJavascript(asset("student_bot.js"),raw->{
+             boolean continueAktu=openAktuAfterCourse&&route(current(),"/Course");
+@@ -218,7 +250,7 @@
+     private String readDob(){try{SharedPreferences p=activity.getSharedPreferences("academic_secret",Activity.MODE_PRIVATE);String iv=p.getString("dob_iv",null),ct=p.getString("dob_enc",null);if(iv==null||ct==null)return null;Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(iv,Base64.NO_WRAP)));return new String(c.doFinal(Base64.decode(ct,Base64.NO_WRAP)),StandardCharsets.UTF_8);}catch(Exception ignored){return null;}}
+     /** SIM Login autofill is separate from AKTU and never touches CAPTCHA or submit. */
+     private void scheduleSimFill(){
+-        if(importedAdmission.isEmpty()||readDob()==null)return;
++        if(importedAdmission.isEmpty()||(readDob()==null&&simTemporaryPassword.isEmpty()))return;
+         final int token=++simFillToken;
+         main.postDelayed(()->repeatSimFill(token,0),390);
+     }
+@@ -229,7 +261,8 @@
+             String digits=dob==null?"":dob.replaceAll("[^0-9]","");
+             String script=asset("sim_fill.js")
+                 .replace("
