@@ -1,0 +1,494 @@
+--- a/app/src/main/java/com/campus/simplus/AcademicFeatures.java
++++ b/app/src/main/java/com/campus/simplus/AcademicFeatures.java
+@@ -1,6 +1,8 @@
+ package com.campus.simplus;
+ 
+ import android.app.Activity;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
+ import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.net.Uri;
+@@ -43,6 +45,11 @@
+     private boolean exportBusy=false;
+     private String aktRoll="";
+     private String importedRoll="";
++    private String importedAdmission="";
++    private int simFillToken=0;
++    private Bitmap cachedProfilePhoto;
++    private String cachedProfilePhotoUrl="";
++    private int photoCacheGeneration=0;
+     private boolean openAktuAfterCourse=false;
+     private int aktuWatchToken=0, aktuProbeCount=0, aktuFillToken=0;
+     private String lastAktuCaptureSignature="";
+@@ -58,6 +65,9 @@
+     private String previousMarksFingerprint="", beforeSelectFingerprint="", beforeShowFingerprint="", candidateFingerprint="", lastCapturedSemester="";
+     private int candidateStableReads=0;
+     private boolean semesterChanged=false;
++    private int scanRequestSerial=0;
++    private final JSONArray scanOutcome=new JSONArray();
++    private int scanNavigationCount=0;
+     private static final String SECRET_ALIAS="SIMPlusDOB_AESv1";
+ 
+     AcademicFeatures(Activity a,WebView e,WebView ui,Runnable showBrowser,Runnable showApp,java.util.function.Consumer<String> navigateCollege){
+@@ -85,16 +95,26 @@
+     void useImportedStudent(JSONObject student){
+         aktuWatchToken++;aktuFillToken++;lastAktuCaptureSignature="";
+         aktRoll = student==null?"":student.optString("roll","").replaceAll("[^0-9]","");
++        importedAdmission=student==null?"":student.optString("admission","").trim();
++        clearPhotoCache();
++        simFillToken++;
+         importedRoll=aktRoll;
+         if(aktRoll.length()>18)aktRoll=aktRoll.substring(0,18);
+         // Never reuse a previous student's DOB when switching profiles.
+         activity.getSharedPreferences("academic_secret",Activity.MODE_PRIVATE).edit().clear().apply();
+         if(student!=null)saveDob(student.optString("dob",""));
+         openAktuAfterCourse=false;
++        previousMarksFingerprint="";lastCapturedSemester="";
++        candidateFingerprint="";candidateStableReads=0;
++        while(scanOutcome.length()>0)scanOutcome.remove(0);
+     }
+     boolean canCapture(){Uri uri=current();return route(uri,"ExamResult")||route(uri,"/Course")||isAktu(uri);}
+     void captureCurrent(){if(scanning){toast("Semester scan is active; stop it before manual capture");return;}Uri uri=current();if(route(uri,"ExamResult"))captureResults("college");else if(isAktu(uri))captureResults("aktu");else if(route(uri,"/Course")||route(uri,"Attend"))captureStudentProfile();else toast("Open SIM Result, Course or AKTU first.");}
++    void onCollegePageStarted(String url){
++        if(scanning&&isCollege(Uri.parse(url)))scanNavigationCount++;
++    }
+     void onPageFinished(String url){Uri uri=current();
++        if(route(uri,"/Login"))scheduleSimFill();else simFillToken++;
+         if(isAktu(uri)){
+             scheduleAktuFill();
+             scheduleAktuWatch();
+@@ -107,56 +127,68 @@
+     private String decode(String raw)throws Exception {if(raw==null||raw.equals("null"))throw new IllegalArgumentException("Empty ERP page");Object value=new JSONTokener(raw).nextValue();return (String)value;}
+     private void toast(String s){Toast.makeText(activity,s,Toast.LENGTH_SHORT).show();}
+     private void emit(String function,String...data){StringBuilder js=new StringBuilder("window.").append(function).append("(");for(int i=0;i<data.length;i++){if(i>0)js.append(',');js.append(JSONObject.quote(data[i]));}js.append(");");app.evaluateJavascript(js.toString(),null);}
+-    private void emitStatus(String message,boolean done){try{JSONObject j=new JSONObject().put("message",message).put("done",done);app.evaluateJavascript("window.onExamScanProgress("+j.toString()+");",null);}catch(Exception ignored){}}
++    private void emitStatus(String message,boolean done){try{JSONObject j=new JSONObject().put("message",message).put("done",done).put("semesters",scanOutcome);app.evaluateJavascript("window.onExamScanProgress("+j.toString()+");",null);}catch(Exception ignored){}}
+     void captureResults(String source){captureResults(source,null);}
+-    private void captureResults(String source,java.util.function.Consumer<Boolean> complete){Uri uri=current();if(("college".equals(source)&&!route(uri,"ExamResult"))||("aktu".equals(source)&&!isAktu(uri))){toast("Capture allowed only on the official result page");if(complete!=null)complete.accept(false);return;}
+-        try{erp.evaluateJavascript(asset("result_bot.js"),out->{boolean success=false;
+-            try{String payload=decode(out);if(payload.length()>330000){toast("Result page too large; use one exam at a time.");return;}
+-                JSONObject snapshot=new JSONObject(payload);
+-                JSONObject identity=snapshot.optJSONObject("profile");
+-                if(identity!=null&&!importedRoll.isEmpty()){
+-                    String actual=identity.optString("roll","").replaceAll("[^0-9]","");
+-                    if(!actual.isEmpty()&&!actual.equals(importedRoll)){
+-                        toast("Official result belongs to a different university roll number");return;
+-                    }
+-                }
+-
+-                if("college".equals(source)&&!scanning&&!previousMarksFingerprint.isEmpty()&&previousMarksFingerprint.equals(snapshot.optString("marksFingerprint",""))){
+-                    JSONArray sels=snapshot.optJSONArray("selections");String selected="";
+-                    if(sels!=null)for(int i=0;i<sels.length();i++){
+-                        JSONObject item=sels.optJSONObject(i);if(item==null)continue;
+-                        String id=(item.optString("id")+" "+item.optString("name")+" "+item.optString("label")).toLowerCase(java.util.Locale.ROOT);
+-                        if(id.contains("semester")||id.contains("sem")){selected=item.optString("valueText","");break;}
+-                    }
+-                    if(!selected.isEmpty()&&!lastCapturedSemester.isEmpty()&&!selected.trim().equalsIgnoreCase(lastCapturedSemester)){
+-                        toast("Result table still belongs to the previous semester. Press Show and wait for fresh marks.");return;
+-                    }
+-                }
+-                if("college".equals(source)&&scanning&&scanSemesterIndex<semesters.size()){
+-                    // Never label a stale marks table as the semester currently being scanned.
+-                    String expected=candidateFingerprint;
+-                    if(expected.isEmpty()||!expected.equals(snapshot.optString("marksFingerprint",""))){
+-                        emitStatus("Results changed during capture. Retrying this semester safely…",false);return;
+-                    }
+-                    String semester=semesters.get(scanSemesterIndex).optString("text");
+-                    JSONArray selections=snapshot.optJSONArray("selections");
+-                    if(selections!=null){
++    /** A semester counts as captured only after the local UI parser confirms
++     * it has stored a nonempty set of actual subject results. */
++    private void captureResults(String source,java.util.function.Consumer<Boolean> complete){
++        Uri uri=current();
++        if(("college".equals(source)&&!route(uri,"ExamResult"))||("aktu".equals(source)&&!isAktu(uri))){
++            toast("Capture allowed only on the official result page");
++            if(complete!=null)complete.accept(false);return;
++        }
++        try{
++            erp.evaluateJavascript(asset("result_bot.js"),out->{
++                try{
++                    String payload=decode(out);
++                    if(payload.length()>330000)throw new IllegalArgumentException("Result page is too large");
++                    JSONObject snapshot=new JSONObject(payload);
++                    JSONObject identity=snapshot.optJSONObject("profile");
++                    if(identity!=null&&!importedRoll.isEmpty()){
++                        String actual=identity.optString("roll","").replaceAll("[^0-9]","");
++                        if(!actual.isEmpty()&&!actual.equals(importedRoll)){
++                            toast("Official result belongs to a different university roll number");
++                            if(complete!=null)complete.accept(false);return;
++                        }
++                    }
++                    if("college".equals(source)&&scanning&&scanSemesterIndex<semesters.size()){
++                        if(candidateFingerprint.isEmpty()||!candidateFingerprint.equals(snapshot.optString("marksFingerprint",""))){
++                            emitStatus("Result table changed during capture; retrying…",false);
++                            if(complete!=null)complete.accept(false);return;
++                        }
++                        String semester=semesters.get(scanSemesterIndex).optString("text");
++                        JSONArray selections=snapshot.optJSONArray("selections");
+                         boolean matched=false;
+-                        for(int i=0;i<selections.length();i++){
+-                            JSONObject selection=selections.optJSONObject(i);if(selection==null)continue;
+-                            String label=selection.optString("label")+" "+selection.optString("name")+" "+selection.optString("id");
+-                            if(label.toLowerCase(java.util.Locale.ROOT).contains("semester")||label.toLowerCase(java.util.Locale.ROOT).contains("sem")){
+-                                matched=semester.trim().equalsIgnoreCase(selection.optString("valueText").trim());break;
++                        if(selections!=null){
++                            for(int i=0;i<selections.length();i++){
++                                JSONObject selection=selections.optJSONObject(i);if(selection==null)continue;
++                                String label=(selection.optString("label")+" "+selection.optString("name")+" "+selection.optString("id")).toLowerCase(java.util.Locale.ROOT);
++                                if(label.contains("semester")||label.matches(".*\\bsem\\b.*")){
++                                    matched=semester.trim().equalsIgnoreCase(selection.optString("valueText").trim());break;
++                                }
+                             }
+                         }
+-                        if(!matched){emitStatus("Semester selection changed during capture; retrying",false);return;}
+-                    }
+-                    snapshot.put("scanContext",new JSONObject().put("semester",semester).put("exam","All assessments"));
+-                    payload=snapshot.toString();
++                        if(!matched){emitStatus("Semester selector changed before capture; retrying",false);if(complete!=null)complete.accept(false);return;}
++                        snapshot.put("scanContext",new JSONObject().put("semester",semester).put("exam","All assessments"));
++                        payload=snapshot.toString();
++                    }
++                    // This call runs in the trusted, bundled local WebView.
++                    // It returns false for unrecognizable tables; the scanner
++                    // never counts mere DOM scraping as a successful capture.
++                    String js="window.receiveExamSnapshot("+JSONObject.quote(source)+","+JSONObject.quote(payload)+");";
++                    app.evaluateJavascript(js,ack->{
++                        boolean imported="true".equals(ack);
++                        if(!imported&&scanning)emitStatus("Visible marks could not be parsed; retrying before saving…",false);
++                        if(complete!=null)complete.accept(imported);
++                    });
++                }catch(Exception ex){
++                    if(!scanning)toast("Could not read the displayed result table");
++                    if(complete!=null)complete.accept(false);
+                 }
+-                emit("receiveExamSnapshot",source,payload);success=true;
+-            }catch(Exception ex){toast("Could not read the displayed result table");}
+-            finally{if(complete!=null)complete.accept(success);}});}catch(Exception ex){toast("Result parser is unavailable");if(complete!=null)complete.accept(false);}
++            });
++        }catch(Exception ex){
++            toast("Result parser is unavailable");if(complete!=null)complete.accept(false);
++        }
+     }
+     void captureStudentProfile(){Uri uri=current();if(!isCollege(uri)||!(route(uri,"/Course")||route(uri,"Attend"))){toast("Open SIM Course or Attendance to read the profile");return;}
+         try{erp.evaluateJavascript(asset("student_bot.js"),raw->{
+@@ -184,6 +216,26 @@
+     private String normalizeDOB(String raw){raw=raw==null?"":raw.trim();java.util.regex.Matcher m=java.util.regex.Pattern.compile("^(\\d{1,2})[./-](\\d{1,2})[./-](\\d{4})$").matcher(raw);if(m.matches())return String.format(java.util.Locale.US,"%02d/%02d/%s",Integer.parseInt(m.group(1)),Integer.parseInt(m.group(2)),m.group(3));m=java.util.regex.Pattern.compile("^(\\d{4})-(\\d{1,2})-(\\d{1,2})$").matcher(raw);if(m.matches())return String.format(java.util.Locale.US,"%02d/%02d/%s",Integer.parseInt(m.group(3)),Integer.parseInt(m.group(2)),m.group(1));return null;}
+     private boolean saveDob(String dob){String clean=normalizeDOB(dob);if(clean==null)return false;try{Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,key());byte[] encrypted=c.doFinal(clean.getBytes(StandardCharsets.UTF_8));SharedPreferences.Editor e=activity.getSharedPreferences("academic_secret",Activity.MODE_PRIVATE).edit();e.putString("dob_iv",Base64.encodeToString(c.getIV(),Base64.NO_WRAP));e.putString("dob_enc",Base64.encodeToString(encrypted,Base64.NO_WRAP));e.apply();return true;}catch(Exception ignored){return false;}}
+     private String readDob(){try{SharedPreferences p=activity.getSharedPreferences("academic_secret",Activity.MODE_PRIVATE);String iv=p.getString("dob_iv",null),ct=p.getString("dob_enc",null);if(iv==null||ct==null)return null;Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(iv,Base64.NO_WRAP)));return new String(c.doFinal(Base64.decode(ct,Base64.NO_WRAP)),StandardCharsets.UTF_8);}catch(Exception ignored){return null;}}
++    /** SIM Login autofill is separate from AKTU and never touches CAPTCHA or submit. */
++    private void scheduleSimFill(){
++        if(importedAdmission.isEmpty()||readDob()==null)return;
++        final int token=++simFillToken;
++        main.postDelayed(()->repeatSimFill(token,0),390);
++    }
++    private void repeatSimFill(int token,int attempt){
++        if(token!=simFillToken||!route(current(),"/Login")||attempt>=22)return;
++        try{
++            String dob=readDob();
++            String digits=dob==null?"":dob.replaceAll("[^0-9]","");
++            String script=asset("sim_fill.js")
++                .replace("'__ADMISSION__'",JSONObject.quote(importedAdmission))
++                .replace("'__DOB__'",JSONObject.quote(digits));
++            erp.evaluateJavascript(script,ignored->{
++                if(token==simFillToken&&route(current(),"/Login"))
++                    main.postDelayed(()->repeatSimFill(token,attempt+1),830);
++            });
++        }catch(Exception ignored){}
++    }
+     void prefillAktu(){fillAktu(true,null);}
+     private void scheduleAktuFill(){
+         final int token=++aktuFillToken;
+@@ -243,7 +295,7 @@
+      * no result is fabricated from a percentage, a list of exams, or missing marks. */
+     void scanCollegeResults(){
+         scanToken++;scanning=false;scanPendingAfterLogin=true;scanWaitingLogin=false;
+-        scanBusy=false;scanRetries=0;semesterVisited=0;viewsCaptured=0;
++        scanBusy=false;scanRetries=0;semesterVisited=0;viewsCaptured=0;scanRequestSerial++;while(scanOutcome.length()>0)scanOutcome.remove(0);
+         scanSemesterIndex=0;scanExamIndex=0;semesters.clear();exams.clear();
+         previousMarksFingerprint="";beforeSelectFingerprint="";beforeShowFingerprint="";candidateFingerprint="";
+         candidateStableReads=0;
+@@ -269,19 +321,47 @@
+     }
+     private void runScan(String action,JSONObject args,java.util.function.Consumer<JSONObject> next){
+         if(!scanning||scanBusy)return;
+-        if(!route(current(),"ExamResult")){scheduleScan(2200);return;}
++        if(!route(current(),"ExamResult")){scheduleScan(1600);return;}
+         try{
+             String script=asset("result_scan.js")
+                     .replace("'__ACTION__'",JSONObject.quote(action))
+                     .replace("__ARGS__",args==null?"{}":args.toString());
+             scanBusy=true;
++            final int id=++scanRequestSerial, token=scanToken, navigation=scanNavigationCount;
++            // ASP.NET postbacks can destroy the JS context before the callback
++            // fires. Recover explicitly rather than leaving the scan frozen.
++            main.postDelayed(()->{
++                if(!scanning||scanToken!=token||scanRequestSerial!=id||!scanBusy)return;
++                scanBusy=false;scanRequestSerial++;
++                boolean changedPage=scanNavigationCount!=navigation;
++                if("choose-semester".equals(action)&&changedPage){
++                    scanStage="confirm-semester";emitStatus("Semester selection reloaded the ERP; verifying before Show…",false);
++                    scheduleScan(1600);
++                }else if("show".equals(action)&&changedPage){
++                    scanStage="read-semester";candidateFingerprint="";candidateStableReads=0;
++                    emitStatus("Show reloaded the ERP; verifying fresh result rows…",false);
++                    scheduleScan(1600);
++                }else if(++scanRetries<5){
++                    emitStatus("ERP is responding slowly; retrying without duplicating marks…",false);
++                    scheduleScan(1300);
++                }else nextSemester("Timed out waiting for the ERP result page");
++            },6100);
+             erp.evaluateJavascript(script,raw->{
++                if(!scanning||scanToken!=token||id!=scanRequestSerial)return;
+                 scanBusy=false;
+-                if(!scanning)return;
++                // Invalidate this request's watchdog before invoking next: next may
++                // start a second async DOM capture and re-use scanBusy.
++                scanRequestSerial++;
+                 try{next.accept(new JSONObject(decode(raw)));}
+-                catch(Exception ex){stopScan("SIM examination controls changed or could not be read");}
++                catch(Exception ex){
++                    if(++scanRetries<6)scheduleScan(1300);
++                    else nextSemester("The ERP changed while reading the semester");
++                }
+             });
+-        }catch(Exception e){scanBusy=false;stopScan("SIM semester reader is unavailable");}
++        }catch(Exception e){scanBusy=false;
++            if(++scanRetries<5)scheduleScan(1200);
++            else nextSemester("SIM semester reader unavailable");
++        }
+     }
+     private void scanTick(){
+         if(!scanning||scanBusy)return;
+@@ -321,11 +401,21 @@
+                         semesterChanged=data.optBoolean("changed");
+                         beforeSelectFingerprint=data.optString("priorFingerprint","");
+                         candidateFingerprint="";candidateStableReads=0;
+-                        scanStage="show-semester";scanRetries=0;scheduleScan(1150);
++                        scanStage="confirm-semester";scanRetries=0;scheduleScan(900);
+                     }else{
+                         if(++scanRetries<3)scheduleScan(900);
+                         else nextSemester("Semester selector did not accept "+item.optString("text"));
+                     }
++                });break;
++            case "confirm-semester":
++                runScan("inspect",null,data->{
++                    JSONObject expected=semesters.get(scanSemesterIndex);
++                    if(!selectedMatches(data.optJSONObject("semester"),expected)){
++                        if(++scanRetries<8){scheduleScan(1050);return;}
++                        nextSemester("Semester dropdown did not settle on "+expected.optString("text"));return;
++                    }
++                    beforeShowFingerprint=data.optString("marksFingerprint","");
++                    scanRetries=0;scanStage="show-semester";scheduleScan(450);
+                 });break;
+             case "show-semester":
+                 // SIM's Exam Name stays untouched. Show returns ALL sessional rows.
+@@ -344,10 +434,14 @@
+                         if(++scanRetries<5){scheduleScan(900);return;}
+                         nextSemester("Semester selection not confirmed");return;
+                     }
++                    if(data.optBoolean("busy")||!data.optBoolean("ready",true)){
++                        if(++scanRetries<27){scheduleScan(850);return;}
++                        nextSemester("ERP kept loading; no marks saved");return;
++                    }
+                     String fingerprint=data.optString("marksFingerprint","");
+                     if(!data.optBoolean("hasMarks")||fingerprint.isEmpty()){
+                         candidateFingerprint="";candidateStableReads=0;
+-                        if(++scanRetries<10){scheduleScan(1100);return;}
++                        if(++scanRetries<24){scheduleScan(1000);return;}
+                         semesterVisited++;nextSemester("No published marks found for this semester");return;
+                     }
+                     // A result belonging to the previously captured semester must never be
+@@ -357,7 +451,7 @@
+                         &&fingerprint.equals(beforeShowFingerprint);
+                     if(sameAsPrevious||staleSelection){
+                         candidateFingerprint="";candidateStableReads=0;
+-                        if(++scanRetries<13){scheduleScan(1100);return;}
++                        if(++scanRetries<26){scheduleScan(1050);return;}
+                         semesterVisited++;
+                         emitStatus("Skipping "+semesters.get(scanSemesterIndex).optString("text")+": ERP did not deliver a distinct result table; no stale copy saved",false);
+                         nextSemester("Stale result blocked");return;
+@@ -374,7 +468,7 @@
+                             lastCapturedSemester=semesters.get(scanSemesterIndex).optString("text","");
+                             semesterVisited++;viewsCaptured++;
+                             nextSemester("Imported verified semester results");}
+-                        else if(++scanRetries<13){candidateStableReads=0;scheduleScan(1100);}
++                        else if(++scanRetries<24){candidateStableReads=0;scheduleScan(1050);}
+                         else{semesterVisited++;nextSemester("Result changed during import; skipped to avoid mixing marks");}
+                     });
+                 });break;
+@@ -385,44 +479,144 @@
+         return shown!=null&&chosen!=null&&chosen.optString("value").equals(shown.optString("value"));
+     }
+     private void nextSemester(String reason){
++        if(scanSemesterIndex<semesters.size())try{
++            String name=semesters.get(scanSemesterIndex).optString("text","");
++            scanOutcome.put(new JSONObject().put("semester",name)
++                .put("state",reason.startsWith("Imported")?"verified":reason.startsWith("No published")?"no-results":"unresolved")
++                .put("reason",reason));
++        }catch(Exception ignored){}
++        emitStatus(reason,false);
+         scanSemesterIndex++;scanExamIndex=0;scanRetries=0;exams.clear();scanStage="choose-semester";
+         candidateFingerprint="";candidateStableReads=0;beforeSelectFingerprint="";beforeShowFingerprint="";
+         scheduleScan(650);
+     }
+     private void nextExam(String reason){scanExamIndex++;scanRetries=0;scanStage="choose-exam";scheduleScan(750);}
+-    void stopScan(String reason){scanning=false;scanPendingAfterLogin=false;scanBusy=false;scanToken++;scanStage="idle";emitStatus(reason,true);}
++    void stopScan(String reason){scanning=false;scanPendingAfterLogin=false;scanBusy=false;scanToken++;scanRequestSerial++;scanStage="idle";emitStatus(reason,true);}
++    private void clearPhotoCache(){
++        photoCacheGeneration++;
++        if(cachedProfilePhoto!=null){cachedProfilePhoto.recycle();cachedProfilePhoto=null;}
++        cachedProfilePhotoUrl="";
++    }
++    /** Caches only the actual visible portrait, never the student's entire UI.
++     * Allows exporting a PDF from the results page after the profile is closed. */
++    void cacheProfilePhoto(String url){
++        if(url==null||url.trim().isEmpty()||
++           cachedProfilePhoto!=null&&url.trim().equals(cachedProfilePhotoUrl))return;
++        final int token=photoCacheGeneration;
++        captureVisibleProfilePhoto(url,bitmap->{
++            if(bitmap==null)return;
++            if(token!=photoCacheGeneration){bitmap.recycle();return;}
++            clearPhotoCache();
++            cachedProfilePhoto=bitmap;
++            cachedProfilePhotoUrl=url.trim();
++        });
++    }
++    /** Pixel-based fallback for photos that the profile WebView can render but
++     * a standalone HTTP client cannot download (e.g. referrer/session checks).
++     * Only captures the selected student's displayed image area, never the page.
++     * Requires the trusted local profile view, a matching image URL and a loaded
++     * HTML image. This runs on Android's UI thread. */
++    private void captureVisibleProfilePhoto(String expectedUrl,java.util.function.Consumer<Bitmap> complete){
++        if(expectedUrl==null||expectedUrl.trim().isEmpty()||!app.isShown()){
++            complete.accept(null);return;
++        }
++        String js="(function(expected){try{var img=document.querySelector('.roster-avatar img');"
++            +"if(!img||!img.complete||img.naturalWidth<1||img.naturalHeight<1)return 'unavailable';"
++            +"if(new URL(img.getAttribute('src'),location.href).href!==new URL(expected,location.href).href)return 'mismatch';"
++            +"img.scrollIntoView({block:'center',behavior:'auto'});return 'ready';"
++            +"}catch(e){return 'error';}})("+JSONObject.quote(expectedUrl.trim())+")";
++        app.evaluateJavascript(js,raw->{
++            if(!"\"ready\"".equals(raw)){complete.accept(null);return;}
++            main.postDelayed(()->{
++                String rectJs="(function(){try{var img=document.querySelector('.roster-avatar img');"
++                    +"if(!img||!img.complete||img.naturalWidth<1)return '';"
++                    +"var r=img.getBoundingClientRect();var el=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);"
++                    +"if(el!==img&&!img.contains(el))return '';"
++                    +"return JSON.stringify({x:r.left,y:r.top,w:r.width,h:r.height,vw:window.innerWidth,vh:window.innerHeight});"
++                    +"}catch(e){return '';}})()";
++                app.evaluateJavascript(rectJs,json->{
++                    Bitmap photo=null;
++                    try{
++                        JSONObject box=new JSONObject(decode(json));
++                        int viewWidth=app.getWidth(),viewHeight=app.getHeight();
++                        double vw=box.optDouble("vw"),vh=box.optDouble("vh");
++                        if(vw<=0||vh<=0||viewWidth<1||viewHeight<1)throw new Exception("Bad viewport");
++                        double scaleX=viewWidth/vw,scaleY=viewHeight/vh;
++                        int left=Math.max(0,(int)Math.round(box.getDouble("x")*scaleX));
++                        int top=Math.max(0,(int)Math.round(box.getDouble("y")*scaleY));
++                        int width=Math.min(viewWidth-left,(int)Math.round(box.getDouble("w")*scaleX));
++                        int height=Math.min(viewHeight-top,(int)Math.round(box.getDouble("h")*scaleY));
++                        if(width<30||height<30||width>viewWidth||height>viewHeight)
++                            throw new Exception("Photo not visible");
++                        Bitmap page=Bitmap.createBitmap(viewWidth,viewHeight,Bitmap.Config.ARGB_8888);
++                        app.draw(new Canvas(page));
++                        photo=Bitmap.createBitmap(page,left,top,width,height);
++                        page.recycle();
++                    }catch(Exception ignored){}
++                    complete.accept(photo);
++                });
++            },260);
++        });
++    }
+     void exportCandidateReport(String raw,JSONObject importedStudent){
+         if(exportBusy){toast("A report is being generated");return;}
+         exportBusy=true;toast("Preparing comprehensive candidate PDF…");
+-        new Thread(()->{
+-            try{
+-                JSONObject payload=new JSONObject(raw);
+-                JSONObject candidate=payload.optJSONObject("candidate");if(candidate==null)candidate=new JSONObject();
+-                if(importedStudent!=null){
+-                    for(String key:StudentRosterStore.FIELDS){
+-                        String value=importedStudent.optString(key,"");
+-                        candidate.put(key,value);
+-                    }
+-                    candidate.put("program",importedStudent.optString("course",""));
+-                }
+-                payload.put("candidate",candidate);
+-                android.graphics.Bitmap portrait=StudentPhotoLoader.fetch(candidate.optString("photoUrl",""));
+-                byte[] finished=CandidateReport.render(payload.toString(),portrait);
+-                if(portrait!=null)portrait.recycle();
+-                String roll=candidate.optString("roll","").replaceAll("[^0-9A-Za-z]","");
+-                String name="SIMPlus_"+(roll.isEmpty()?"Student":roll)+"_Comprehensive_Report.pdf";
+-                main.post(()->{
+-                    exportBusy=false;pendingReport=finished;
+-                    try{
+-                        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+-                        i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/pdf");
+-                        i.putExtra(Intent.EXTRA_TITLE,name);
+-                        activity.startActivityForResult(i,SAVE_REPORT);
+-                    }catch(Exception e){pendingReport=null;toast("Document save picker unavailable");}
+-                });
+-            }catch(Exception e){String reason=e.getMessage();main.post(()->{exportBusy=false;toast("Report unavailable: "+(reason==null?"Unknown error":reason));});}
+-        },"SIMPlus-PDF").start();
++        // Retain a source image that is already visibly loaded in the profile.
++        // This does not access image pixels through cross-origin JavaScript.
++        JSONObject quickCandidate=null;
++        try{quickCandidate=new JSONObject(raw).optJSONObject("candidate");}catch(Exception ignored){}
++        String expectedPhoto=importedStudent!=null?importedStudent.optString("photoUrl",""):
++            quickCandidate!=null?quickCandidate.optString("photoUrl",""):"";
++        final String userAgent=erp.getSettings().getUserAgentString();
++        Bitmap alreadyLoaded=null;
++        if(cachedProfilePhoto!=null&&expectedPhoto.trim().equals(cachedProfilePhotoUrl)){
++            alreadyLoaded=cachedProfilePhoto.copy(Bitmap.Config.ARGB_8888,false);
++        }
++        final Bitmap memoryPhoto=alreadyLoaded;
++        java.util.function.Consumer<Bitmap> generate=onscreen->{
++            new Thread(()->{
++                Bitmap portrait=onscreen;
++                try{
++                    JSONObject payload=new JSONObject(raw);
++                    JSONObject candidate=payload.optJSONObject("candidate");if(candidate==null)candidate=new JSONObject();
++                    if(importedStudent!=null){
++                        for(String key:StudentRosterStore.FIELDS){
++                            candidate.put(key,importedStudent.optString(key,""));
++                        }
++                        candidate.put("program",importedStudent.optString("course",""));
++                    }
++                    payload.put("candidate",candidate);
++                    String photoURL=candidate.optString("photoUrl","");
++                    String issue="";
++                    if(portrait==null){
++                        StudentPhotoLoader.Result photo=StudentPhotoLoader.load(photoURL,userAgent);
++                        portrait=photo.bitmap;issue=photo.problem;
++                    }
++                    byte[] finished=CandidateReport.render(payload.toString(),portrait);
++                    if(portrait==null&&!photoURL.trim().isEmpty()){
++                        final String detail=issue;
++                        main.post(()->toast("PDF photo not embedded: "+detail));
++                    }
++                    String roll=candidate.optString("roll","").replaceAll("[^0-9A-Za-z]","");
++                    String name="SIMPlus_"+(roll.isEmpty()?"Student":roll)+"_Comprehensive_Report.pdf";
++                    main.post(()->{
++                        exportBusy=false;pendingReport=finished;
++                        try{
++                            Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
++                            i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/pdf");
++                            i.putExtra(Intent.EXTRA_TITLE,name);
++                            activity.startActivityForResult(i,SAVE_REPORT);
++                        }catch(Exception e){pendingReport=null;toast("Document save picker unavailable");}
++                    });
++                }catch(Exception e){String reason=e.getMessage();main.post(()->{
++                    exportBusy=false;toast("Report unavailable: "+(reason==null?"Unknown error":reason));
++                });}
++                finally{if(portrait!=null)portrait.recycle();}
++            },"SIMPlus-PDF").start();
++        };
++        if(memoryPhoto!=null)generate.accept(memoryPhoto);
++        else captureVisibleProfilePhoto(expectedPhoto,generate);
+     }
+     boolean onActivityResult(int request,int result,Intent data){if(request!=SAVE_REPORT)return false;if(result!=Activity.RESULT_OK||data==null||data.getData()==null){pendingReport=null;return true;}try{if(pendingReport==null)throw new Exception("Report is empty");try(java.io.OutputStream out=activity.getContentResolver().openOutputStream(data.getData())){if(out==null)throw new Exception("Cannot open destination");out.write(pendingReport);out.flush();}toast("Candidate report saved successfully");}catch(Exception e){toast("PDF was not saved: "+e.getMessage());}pendingReport=null;return true;}
+-    void stop(){scanning=false;aktuWatchToken++;pendingReport=null;}
++    void stop(){scanning=false;aktuWatchToken++;pendingReport=null;clearPhotoCache();}
+ }
