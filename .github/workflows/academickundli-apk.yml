@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -75,3 +75,20 @@ jobs:
           name: AcademicKundli-v0.9.5-debug-APK
           path: build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release APK (direct download, no login)
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          gh release create "academickundli-v0.9.5" "$APK#AcademicKundli_v0.9.5.apk" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "AcademicKundli v0.9.5 — Android APK" \
+            --notes "Android debug APK for AcademicKundli v0.9.5, compiled by GitHub Actions from the authenticated source build. This release contains no personal ERP data. Install only if you trust the repository and source." \
+            --prerelease
+          gh release view "academickundli-v0.9.5" --repo "$GITHUB_REPOSITORY" --json url,assets
