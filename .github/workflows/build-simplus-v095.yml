@@ -197,7 +197,7 @@ jobs:
           actual=hashlib.sha256(raw).hexdigest()
           expected='68a79ab51aae245554af7fba33e47307b72ca2139e07749612a718008451d8b6'
           assert actual==expected,(actual,expected)
-          assert raw.startswith(b'--- a/app/build.gradle\\n'), 'Unexpected patch file'
+          assert raw.startswith(b'--- a/app/build.gradle\n'), 'Unexpected patch file'
           Path('/tmp/simplus-v095-switch.patch').write_bytes(raw)
           print('Verified v0.9.5 patch sha256:',actual)
           PY
