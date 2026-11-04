@@ -1,0 +1,51 @@
+--- a/app/src/main/assets/app.js
++++ b/app/src/main/assets/app.js
+@@ -6,6 +6,7 @@
+ let rosterReady=false,rosterStudents=[],rosterSelected=-1,rosterProfile=null;
+ let rosterImporting=false,rosterImportError='',rosterImportNote='';
+ let rosterCount=0,studentSearchOpen=false,studentQuery='',studentMatches=[],studentMatchCount=0,studentSearchTimer=null;
++let collection={active:false,stage:'idle',message:''},dailySubjectFilter='all';
+ const now=()=>E.iso(new Date());
+ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const pct=(n,places=1)=>Number.isFinite(n)?Number(n).toFixed(places)+'%':'—';
+@@ -39,13 +40,14 @@
+  const items=Array.isArray(snapshot.students)?snapshot.students:[];
+  rosterCount=Number(snapshot.count)||items.length;
+  const person=snapshot.student||null,idx=Number(snapshot.selected);
+- const changed=person&&(rosterSelected!==idx||!rosterProfile||rosterProfile.roll!==person.roll);
++ const changed=person&&(rosterSelected!==idx||!rosterProfile||rosterProfile.studentKey!==person.studentKey);
+  if(changed){
+    const wasActive=rosterSelected>=0,roll=String(person.roll||'').trim();
+-   const sameOld=!wasActive&&(String(state.profile.roll||'').trim()===roll)&&roll;
++   const scope=String(person.studentKey||roll||person.admission||'student-'+idx);
++   const sameOld=!wasActive&&roll&&(String(state.profile.roll||'').trim()===roll);
+    if(wasActive){persist();persistResults();}
+-   activeAttendanceKey=STORE+':student:'+encodeURIComponent(roll);
+-   activeResultsKey=EXAMS+':student:'+encodeURIComponent(roll);
++   activeAttendanceKey=STORE+':student:'+encodeURIComponent(scope);
++   activeResultsKey=EXAMS+':student:'+encodeURIComponent(scope);
+    if(sameOld&&!localStorage.getItem(activeAttendanceKey)){
+      localStorage.setItem(activeAttendanceKey,localStorage.getItem(STORE)||'{}');
+      localStorage.setItem(activeResultsKey,localStorage.getItem(EXAMS)||'{}');
+@@ -60,6 +62,10 @@
+  if(rosterSelected>=0)page='home';
+  render();
+ }
++window.extendStudentExcel=()=>{
++  rosterImportError='';rosterImportNote='Choose an additional Excel file. Existing students will be preserved.';
++  renderRosterGate();if(!native('extendRoster'))window.onRosterImportError('The Android roster importer is unavailable.');
++};
+ window.importStudentExcel=()=>{
+   rosterImportError='';rosterImportNote='Choose an Excel .xlsx file from your phone or Drive.';
+   renderRosterGate();
+@@ -80,12 +86,12 @@
+ };
+ function updateStudentSearchResults(){
+  const out=document.getElementById('studentSearchResults');if(!out)return;
+- out.innerHTML=`<div class="student-search-meta">${studentMatchCount} match${studentMatchCount===1?'':'es'}${studentMatchCount>studentMatches.length?` · Showing first ${studentMatches.length}`:''}</div>${studentMatches.length?studentMatches.map(s=>`<button type="button" class="student-search-row" onclick="chooseStudent(${Number(s.index)})"><strong>${esc(s.name)} <span>(${esc(s.roll)})</span></strong><small>University roll number ${esc(s.roll)}</small></button>`).join(''):'<div class="student-search-empty">No students match this search.</div>'}`;
++ out.innerHTML=`<div class="student-search-meta">${studentMatchCount} match${studentMatchCount===1?'':'es'}${studentMatchCount>studentMatches.length?` · Showing first ${studentMatches.length}`:''}</div>${studentMatches.length?studentMatches.map(s=>`<button type="button" class="student-search-row" onclick="chooseStudent(${Number(s.index)})"><strong>${esc(s.name)} <span>(${esc(s.roll||(s.admission?'Admission '+s.admission:'Pending university roll'))})</span></strong><small>${s.roll?'University roll number':'Admission number'} ${esc(s.roll||s.admission||'Pending')}</small></button>`).join(''):'<div class="student-search-empty">No students match this search.</div>'}`;
+ }
+ 
+ window.onRosterLoaded=consumeRoster;
+ window.onRosterImportStarted=()=>{rosterImporting=true;rosterImportError='';rosterImportNote='Reading and validating your workbook…';renderRosterGate();};
+-window.onRosterImported=s=>{rosterImporting=false;rosterImportError='';rosterImportNote='';consumeRoster(s);toast(`Imported ${rosterCount} student records successfull
