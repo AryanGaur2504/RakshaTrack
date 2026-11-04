@@ -1,0 +1,62 @@
+--- a/app/src/main/assets/result_bot.js
++++ b/app/src/main/assets/result_bot.js
+@@ -32,7 +32,9 @@
+  return trim(parts.join(' | ')).slice(-2600);
+ };
+ const relevant=[];
+-for(const t of tables){
++const collegeGrid=document.getElementById('MCPH1_SCPH_gvExamDetail');
++const activeTables=location.pathname.toLowerCase().includes('examresult')?(collegeGrid?[collegeGrid]:[]):tables;
++for(const t of activeTables){
+  const trs=[...t.querySelectorAll('tr')].filter(r=>r.closest('table')===t);
+  const first=trs.slice(0,3).map(r=>trim(r.textContent||'').slice(0,140).toLowerCase()).join(' ');
+  if(!/\bsubject\b/.test(first)||!/\b(marks?|grade|result|obtained)\b/.test(first)||trs.length<2)continue;
+--- a/app/src/main/assets/result_scan.js
++++ b/app/src/main/assets/result_scan.js
+@@ -16,23 +16,29 @@
+ let sem=fields.find(e=>/semester|\bsem\b/i.test(title(describe(e))))||fields[0];
+ let exam=fields.find(e=>e!==sem&&/exam|test|assessment|sessional/i.test(title(describe(e))))||fields.find(e=>e!==sem);
+ function resultTableData(){
++ // The SIM ASP.NET page has this explicit grid only after a successful Show
++ // postback. Other tables are candidate details, not examination results.
++ const grid=document.getElementById('MCPH1_SCPH_gvExamDetail');
++ const sources=grid&&visible(grid)?[grid]:[];
+  const rows=[];
+- for(const t of [...document.querySelectorAll('table')].filter(visible)){
++ for(const t of sources){
+    const trs=[...t.querySelectorAll('tr')].filter(r=>r.closest('table')===t);
+-   const first=trs.slice(0,3).map(r=>clean(r.textContent||'').toLowerCase()).join(' ');
+-   if(!/\bsubject\b/.test(first)||!/\b(marks?|grade|result|obtained)\b/.test(first)||trs.length<2)continue;
++   if(trs.length<2)continue;
++   const heading=clean(trs[0].textContent).toLowerCase();
++   if(!heading.includes('subject name')||!heading.includes('marks obtain'))continue;
+    rows.push(trs.map(r=>[...r.querySelectorAll('td,th')].filter(c=>c.closest('table')===t).map(c=>clean(c.textContent)).join('\u001f')).join('\u001e'));
+  }
+  const body=rows.join('\u001d');let hash=2166136261;
+  for(let i=0;i<body.length;i++){hash^=body.charCodeAt(i);hash=Math.imul(hash,16777619);}
+- return {hasMarks:rows.length>0,marksFingerprint:rows.length?String(hash>>>0)+':'+body.length:'',resultTables:rows.length};
++ return {hasMarks:rows.length>0,marksFingerprint:rows.length?String(hash>>>0)+':'+body.length:'',resultTables:rows.length,
++   examGridId:grid?'MCPH1_SCPH_gvExamDetail':'',rowCount:grid?Math.max(0,grid.querySelectorAll('tr').length-1):0};
+ }
+ const ready=document.readyState!=='loading';
+ const busy=[...document.querySelectorAll('[aria-busy="true"],.loading,.spinner,[id*="UpdateProgress"],.blockUI')].some(visible);
+ const data={state:'ok',ready,busy,semester:sem?describe(sem):null,exam:exam?describe(exam):null,...resultTableData()};
+ if(action==='inspect'||action==='semesters')return JSON.stringify(data);
+ if(action==='show'){
+- const btn=[...document.querySelectorAll('button,input[type=submit],input[type=button],a')].find(b=>visible(b)&&/^(show|view|search|display|result|get result)$/i.test(clean(b.value||b.textContent)));
++ const btn=document.getElementById('MCPH1_SCPH_btnRun')||[...document.querySelectorAll('button,input[type=submit],input[type=button],a')].find(b=>visible(b)&&/^(show|view|search|display|result|get result)$/i.test(clean(b.value||b.textContent)));
+  if(btn){const before=data.marksFingerprint;btn.click();return JSON.stringify({state:'show-clicked',beforeFingerprint:before});}
+  return JSON.stringify({state:'no-show-button'});
+ }
+--- a/app/src/main/assets/sim_fill.js
++++ b/app/src/main/assets/sim_fill.js
+@@ -1,9 +1,10 @@
+ /* SIM login autofill. First-party Login page only; never reads or alters CAPTCHA,
+    never submits the form. User's selected roster is the sole credential source. */
+-(function(admission,dob){'use strict';
++(function(admission,dob,customPassword){'use strict';
+   const norm=s=>String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]/g,'');
+   const value=String(admission||'').trim().slice(0,50);
+   const digits=String(dob||'').replace(/\D/g,'');
++  const custom=String(customPassword||'').slice(0,100);
+   const validDob=()=>{if(!/^\d{8}$/.test(d
