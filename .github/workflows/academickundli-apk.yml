@@ -32,9 +32,11 @@ jobs:
         run: |
           set -e
           echo "ANDROID_HOME=$ANDROID_HOME"
-          command -v sdkmanager
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+          sdkmgr=$(find "$ANDROID_HOME/cmdline-tools" -maxdepth 4 -type f -name sdkmanager | head -n 1)
+          test -x "$sdkmgr" || { echo "Missing Android SDK command-line tools"; exit 1; }
+          echo "Using SDK manager: $sdkmgr"
+          yes | "$sdkmgr" --licenses >/dev/null || true
+          "$sdkmgr" --install 'platforms;android-35' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
