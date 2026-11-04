@@ -1,0 +1,70 @@
+e.ROOT).contains("studentofficial")) {
++                    collectionStage="official-reading";
++                    int serial=collectionSerial;
++                    main.postDelayed(()->{
++                        if(!collecting||collectionSerial!=serial||!"official-reading".equals(collectionStage))return;
++                        academics.captureOfficialSection(success->{
++                            if(!collecting||collectionSerial!=serial)return;
++                            setCollectionProgress("official",success?"Section captured from StudentOfficial":"Section not published or unavailable; continuing",false);
++                            startCollegeCollection();
++                        });
++                    },850);
++                }
+             } catch(Exception ignored) {
+                 collegeSessionReady = false;
+                 browserTitle.setText("Could not verify ERP login");
+@@ -371,7 +405,78 @@
+             appView.evaluateJavascript("window." + callback + "(" + safe + ");", null);
+         }catch(Exception ex){message("Student roster cannot be displayed");}
+     }
+-    private void showRosterImport(){
++    private void collectionProgress(String stage,String message,boolean done){
++        collectionStage=stage;
++        if(browserProgress!=null)browserProgress.setVisibility(collecting&&!done?View.VISIBLE:View.GONE);
++        if(browserTitle!=null&&collecting)browserTitle.setText(message.length()>48?message.substring(0,48)+"…":message);
++        try{
++            JSONObject update=new JSONObject().put("stage",stage).put("message",message)
++                .put("done",done).put("active",collecting);
++            appView.evaluateJavascript("window.onCollectionProgress("+update.toString()+");",null);
++        }catch(Exception ignored){}
++    }
++    private void setCollectionProgress(String stage,String message,boolean done){collectionProgress(stage,message,done);}
++    /** Fetch a single selected, authorized student's data in the existing
++     * authenticated WebView, stopping for official human CAPTCHA challenges. */
++    private void startFullCollection(String startDate,String optionalPassword){
++        JSONObject student=rosterStore.selected();
++        if(student==null){message("Select a student first");return;}
++        if(collecting){message("A collection is already running");return;}
++        try{
++            SimpleDateFormat df=new SimpleDateFormat("yyyy-MM-dd",Locale.US);df.setLenient(false);
++            Date chosen=df.parse(startDate);if(chosen==null||chosen.after(new Date()))throw new Exception("Invalid date");
++        }catch(Exception e){message("Choose a valid semester start date");return;}
++        collecting=true;collectionSerial++;
++        collectionAttendanceDate=startDate;collectionStage="attendance";
++        if(academics!=null)academics.setSimTemporaryPassword(optionalPassword);
++        collectionProgress("attendance","Attendance: sign in to SIM and solve CAPTCHA if asked",false);
++        SimpleDateFormat df=new SimpleDateFormat("yyyy-MM-dd",Locale.US);
++        startAutomaticSync(startDate,df.format(new Date()));
++        if(!autoActive){cancelFullCollection();message("Attendance automation could not start");}
++    }
++    private void startCourseCollection(){
++        if(!collecting)return;
++        collectionProgress("course","Reading authenticated SIM Course details…",false);
++        navigateCollege("https://glbg.servergi.com:8072/ISIMGLB/Student/Course");
++    }
++    private void startOfficialCollection(){
++        if(!collecting)return;
++        collectionProgress("official","Reading student Section from StudentOfficial…",false);
++        navigateCollege(STUDENT_OFFICIAL);
++    }
++    private void startCollegeCollection(){
++        if(!collecting)return;
++        collectionProgress("college-results","Capturing every published SIM semester…",false);
++        academics.setScanCompletion(reason->{
++            if(!collecting||!"college-results".equals(collectionStage))return;
++            collectionProgress("college-results",reason,false);
++            startAktuCollection();
++        });
++        academics.scanCollegeResults();
++    }
++    private void startAktuCollect
