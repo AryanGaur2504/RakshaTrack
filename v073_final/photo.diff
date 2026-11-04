@@ -1,0 +1,172 @@
+--- a/app/src/main/java/com/campus/simplus/CandidateReport.java
++++ b/app/src/main/java/com/campus/simplus/CandidateReport.java
+@@ -110,6 +110,7 @@
+                 float scale=Math.max(110f/width,128f/height);
+                 int croppedW=Math.max(1,Math.round(110f/scale)),croppedH=Math.max(1,Math.round(128f/scale));
+                 int x0=Math.max(0,(portrait.getWidth()-croppedW)/2),y0=Math.max(0,(portrait.getHeight()-croppedH)/2);
++                paint.setColor(Color.WHITE);paint.setAlpha(255);paint.setStyle(Paint.Style.FILL);paint.setFilterBitmap(true);
+                 canvas.drawBitmap(portrait,new Rect(x0,y0,Math.min(portrait.getWidth(),x0+croppedW),Math.min(portrait.getHeight(),y0+croppedH)),new RectF(photoX,photoTop,photoX+110,photoTop+128),paint);
+             }
+         }else{
+--- a/app/src/main/java/com/campus/simplus/StudentPhotoLoader.java
++++ b/app/src/main/java/com/campus/simplus/StudentPhotoLoader.java
+@@ -2,40 +2,104 @@
+ 
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
++import android.webkit.CookieManager;
+ import java.io.ByteArrayOutputStream;
+ import java.io.InputStream;
+ import java.net.InetAddress;
+ import java.net.URL;
++import java.util.Locale;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
+ import javax.net.ssl.HttpsURLConnection;
+ 
+-/** Fetches only explicitly supplied HTTPS student image URLs on a worker thread. */
++/** Loads exactly the student's roster photo for a PDF. A profile WebView can
++ * display an image through redirects/session cookies; the PDF fetch must do so
++ * as well. Never fetches file/http/private-network URLs or stores cookies. */
+ final class StudentPhotoLoader {
++    private static final int MAX_IMAGE_BYTES=5*1024*1024;
+     private StudentPhotoLoader(){}
+-    static Bitmap fetch(String value){
+-        if(value==null||value.length()>2000)return null;
+-        HttpsURLConnection conn=null;
++
++    static final class Result {
++        final Bitmap bitmap;
++        final String problem;
++        Result(Bitmap b,String message){bitmap=b;problem=message;}
++    }
++    static Bitmap fetch(String value){return load(value,null).bitmap;}
++    static Result load(String value,String webUserAgent){
++        if(value==null||value.trim().isEmpty())return new Result(null,"Photo URL is missing");
++        if(value.length()>2200)return new Result(null,"Photo URL is too long");
++        String target=value.trim();
++        // A Google Drive viewing page is HTML, not an image. Use its public
++        // thumbnail endpoint when the source is a /file/d/<id>/view link.
+         try{
+-            URL url=new URL(value.trim());
+-            if(!"https".equalsIgnoreCase(url.getProtocol())||url.getUserInfo()!=null)return null;
+-            String host=url.getHost();
+-            if(host==null||host.length()<4||host.equalsIgnoreCase("localhost")||host.endsWith(".local")||host.endsWith(".internal"))return null;
+-            InetAddress[] addresses=InetAddress.getAllByName(host);
+-            for(InetAddress addr:addresses){if(addr.isAnyLocalAddress()||addr.isLoopbackAddress()||addr.isSiteLocalAddress()||addr.isLinkLocalAddress()||addr.isMulticastAddress())return null;}
+-            conn=(HttpsURLConnection)url.openConnection();conn.setConnectTimeout(5000);conn.setReadTimeout(5000);conn.setInstanceFollowRedirects(false);
+-            conn.setRequestProperty("Accept","image/jpeg,image/png,image/webp");
+-            if(conn.getResponseCode()!=200)return null;
+-            String mime=conn.getContentType();if(mime==null||!mime.toLowerCase(java.util.Locale.ROOT).startsWith("image/"))return null;
+-            if(conn.getContentLengthLong()>2*1024*1024)return null;
+-            try(InputStream in=conn.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
+-                byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>2*1024*1024)return null;out.write(b,0,n);}
+-                byte[] raw=out.toByteArray();
+-                BitmapFactory.Options probe=new BitmapFactory.Options();probe.inJustDecodeBounds=true;
+-                BitmapFactory.decodeByteArray(raw,0,raw.length,probe);
+-                if(probe.outWidth<=0||probe.outHeight<=0||probe.outWidth>8000||probe.outHeight>8000)return null;
+-                BitmapFactory.Options decode=new BitmapFactory.Options();decode.inSampleSize=1;
+-                while(probe.outWidth/decode.inSampleSize>600||probe.outHeight/decode.inSampleSize>600)decode.inSampleSize*=2;
+-                return BitmapFactory.decodeByteArray(raw,0,raw.length,decode);
++            URL test=new URL(target);
++            if("drive.google.com".equalsIgnoreCase(test.getHost())){
++                Matcher m=Pattern.compile("/file/d/([A-Za-z0-9_-]{12,})/").matcher(test.getPath()+"/");
++                if(m.find())target="https://drive.google.com/thumbnail?id="+m.group(1)+"&sz=w900";
+             }
+-        }catch(Exception ignored){return null;}finally{if(conn!=null)conn.disconnect();}
++        }catch(Exception ignored){}
++        String problem="Could not retrieve photo";
++        for(int hop=0;hop<6;hop++){
++            HttpsURLConnection conn=null;
++            try{
++                URL url=new URL(target);
++                if(!allowed(url))return new Result(null,"Photo link must be a public HTTPS image URL");
++                conn=(HttpsURLConnection)url.openConnection();
++                conn.setInstanceFollowRedirects(false);
++                conn.setConnectTimeout(9000);conn.setReadTimeout(11000);
++                conn.setRequestProperty("Accept","image/jpeg,image/png,image/webp,image/*;q=0.8,*/*;q=0.1");
++                if(webUserAgent!=null&&!webUserAgent.isEmpty())conn.setRequestProperty("User-Agent",webUserAgent);
++                // Same-origin cookies are passed only to their own HTTPS host,
++                // exactly as the browser does for the displayed profile image.
++                String cookie=CookieManager.getInstance().getCookie(url.toString());
++                if(cookie!=null&&!cookie.isEmpty())conn.setRequestProperty("Cookie",cookie);
++                int status=conn.getResponseCode();
++                if(status==301||status==302||status==303||status==307||status==308){
++                    String redirect=conn.getHeaderField("Location");
++                    if(redirect==null||redirect.isEmpty())return new Result(null,"Image redirect has no destination");
++                    URL next=new URL(url,redirect);
++                    if(!allowed(next))return new Result(null,"Image redirected outside safe HTTPS hosts");
++                    target=next.toString();continue;
++                }
++                if(status!=200){problem="Photo server returned HTTP "+status;return new Result(null,problem);}
++                long length=conn.getContentLengthLong();
++                if(length>MAX_IMAGE_BYTES)return new Result(null,"Photo is larger than 5 MB");
++                String mime=conn.getContentType();
++                if(mime!=null){mime=mime.toLowerCase(Locale.ROOT);
++                    // Some image/CDN URLs send octet-stream with correct image bytes.
++                    if(!mime.startsWith("image/")&&!mime.startsWith("application/octet-stream")&&!mime.startsWith("binary/octet-stream")){
++                        problem="Photo URL returned "+mime.split(";",2)[0]+" instead of an image";
++                        return new Result(null,problem);
++                    }
++                }
++                try(InputStream in=conn.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
++                    byte[] b=new byte[8192];int n;
++                    while((n=in.read(b))!=-1){if(out.size()+n>MAX_IMAGE_BYTES)return new Result(null,"Photo download exceeds 5 MB");out.write(b,0,n);}
++                    byte[] bytes=out.toByteArray();
++                    BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;
++                    BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
++                    if(bounds.outWidth<=0||bounds.outHeight<=0)return new Result(null,"Downloaded photo is not a supported image");
++                    if(bounds.outWidth>12000||bounds.outHeight>12000)return new Result(null,"Photo dimensions are too large");
++                    BitmapFactory.Options opt=new BitmapFactory.Options();opt.inSampleSize=1;
++                    while(bounds.outWidth/opt.inSampleSize>1050||bounds.outHeight/opt.inSampleSize>1050)opt.inSampleSize*=2;
++                    Bitmap bmp=BitmapFactory.decodeByteArray(bytes,0,bytes.length,opt);
++                    if(bmp==null)return new Result(null,"Could not decode photograph");
++                    return new Result(bmp,"");
++                }
++            }catch(Exception ex){problem="Photo download failed (network or access restrictions)";return new Result(null,problem);}
++            finally{if(conn!=null)conn.disconnect();}
++        }
++        return new Result(null,"Too many photo URL redirects");
++    }
++    private static boolean allowed(URL url){
++        if(!"https".equalsIgnoreCase(url.getProtocol())||url.getUserInfo()!=null)return false;
++        String host=url.getHost();if(host==null||host.length()<4||host.length()>245)return false;
++        String h=host.toLowerCase(Locale.ROOT);
++        if(h.equals("localhost")||h.endsWith(".local")||h.endsWith(".internal")||h.endsWith(".test"))return false;
++        int port=url.getPort();if(port!=-1&&port!=443&&!(port==8072&&"glbg.servergi.com".equals(h)))return false;
++        try{for(InetAddress a:InetAddress.getAllByName(h)){
++            if(a.isAnyLocalAddress()||a.isLoopbackAddress()||a.isLinkLocalAddress()||a.isSiteLocalAddress()||a.isMulticastAddress())return false;
++        }}catch(Exception e){return false;}
++        return true;
+     }
+ }
+--- a/app/src/main/java/com/campus/simplus/MainActivity.java
++++ b/app/src/main/java/com/campus/simplus/MainActivity.java
+@@ -158,6 +158,7 @@
+         erpView.setWebViewClient(new WebViewClient() {
+             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                 Uri uri = Uri.parse(url);
++                if(academics!=null&&AcademicFeatures.isCollege(uri))academics.onCollegePageStarted(url);
+                 if (isProtectedCollegePath(uri)) mostRecentCollegeRoute = url;
+                 if (isLoginPath(uri) && collegeSessionReady) {
+                     collegeSessionReady = false;
+@@ -170,6 +171,7 @@
+                 browserTitle.setText(url.contains("ExamResult") ? "College exam results" : (url.contains("Course") ? "Academic profile" : (url.contains("aktu.ac.in") ? "AKTU One View" : (url.contains("TodayAttendence") ? "Today\u0027s Attendance" : "Official SIM ERP"))));
+                 Uri uri = Uri.parse(url);
+                 if (AcademicFeatures.isCollege(uri)) {
++                    if (academics != null) academics.onPageFinished(url);
+                     verifyCollegeAuthentication(url);
+                 } else if (AcademicFeatures.isAktu(uri) && academics != null) {
+                     academics.onPageFinished(url);
+@@ -429,6 +431,11 @@
+         @JavascriptInterface public void captureCurrentResult(){main.post(() -> academics.captureCurrent());}
+         @JavascriptInterface public void captureStudentProfile(){main.post(() -> academics.captureStudentProfile());}
+         @JavascriptInterface public void scanCollegeResults(){main.post(() -> academics.scanCollegeResults());}
++        @JavascriptInterface public void cacheStudentPhoto(String url){main.post(() -> {
++            JSONObject active=rosterStore.selected();
++            if(active!=null&&url!=null&&url.equals(active.optString("photoUrl","")))
++                academics.cacheProfilePhoto(url);
++        });}
+         @JavascriptInterface public void exportCandidateReport(String json){main.post(() -> academics.exportCandidateReport(json,rosterStore.selected()));}
+         @JavascriptInterface public void showToday() { main.post(() -> MainActivity.this.showToday()); }
+         @JavascriptInterface public void showLogin() {
