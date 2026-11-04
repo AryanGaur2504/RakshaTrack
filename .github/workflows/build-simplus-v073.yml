@@ -59,7 +59,7 @@ jobs:
           patch -p1 --batch < v072_patch.diff
       - name: Apply SIM login, scanner and photo fixes
         run: |
-          for p in v073_final/academic.diff v073_final/photo.diff v073_final/ui.diff; do printf '\\n' >> "$p"; done
+          for p in v073_final/academic.diff v073_final/photo.diff v073_final/ui.diff; do echo >> "$p"; done
           patch -p1 --batch < v073_final/academic.diff
           patch -p1 --batch < v073_final/photo.diff
           patch -p1 --batch < v073_final/ui.diff
