@@ -1,0 +1,55 @@
+name: Build AcademicKundli v0.9.4 APK
+on:
+  push:
+    branches:
+      - academickundli-build-v0.9.4
+    paths:
+      - AcademicKundli_v0.9.4_Source.zip
+      - .github/workflows/academickundli-apk.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate exact source archive
+        shell: bash
+        run: |
+          echo "3f6128f129b4a29e1606ed06fb7725b476a6959b4bb12de53c6ed58c33f331de  AcademicKundli_v0.9.4_Source.zip" | sha256sum --check
+          unzip -t AcademicKundli_v0.9.4_Source.zip
+          unzip -q AcademicKundli_v0.9.4_Source.zip -d build-input
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android Platform 35
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Check JavaScript sources and regression tests
+        working-directory: build-input/AcademicKundli_v0.9.4
+        shell: bash
+        run: |
+          set -e
+          for file in app/src/main/assets/*.js; do node --check "$file"; done
+          for file in tests/*.js; do node "$file"; done
+      - name: Assemble Android debug APK
+        working-directory: build-input/AcademicKundli_v0.9.4
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
+      - name: Check generated APK
+        shell: bash
+        run: |
+          test -s build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk
+          sha256sum build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AcademicKundli-v0.9.4-debug-APK
+          path: build-input/AcademicKundli_v0.9.4/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
