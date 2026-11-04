@@ -116,6 +116,7 @@ jobs:
           grep -F "versionName '1.0.0'" app/build.gradle
           grep -F 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
           test -s app/src/main/assets/academic-logo.png
+          sed -i 's/brand.setText("SIM+ Campus")/brand.setText("AcademicKundli")/' app/src/main/java/com/campus/simplus/MainActivity.java
       - name: Run JavaScript tests
         run: |
           for f in app/src/main/assets/*.js; do node --check "$f"; done
