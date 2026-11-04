@@ -1,0 +1,43 @@
+ptJSONObject(i);if(person==null)continue;
+-            String name=person.optString("name"),roll=person.optString("roll");
+-            if(!needle.isEmpty()&&!name.toLowerCase(Locale.ROOT).contains(needle)&&!roll.toLowerCase(Locale.ROOT).contains(needle))continue;
++            String name=person.optString("name"),roll=person.optString("roll"),admission=person.optString("admission");
++            if(!needle.isEmpty()&&!name.toLowerCase(Locale.ROOT).contains(needle)&&!roll.toLowerCase(Locale.ROOT).contains(needle)&&!admission.toLowerCase(Locale.ROOT).contains(needle))continue;
+             matches++;
+-            if(list.length()<take)try{list.put(new JSONObject().put("index",i).put("name",name).put("roll",roll));}catch(Exception ignored){}
++            if(list.length()<take)try{list.put(new JSONObject().put("index",i).put("name",name).put("roll",roll).put("admission",admission));}catch(Exception ignored){}
+         }
+         JSONObject result=new JSONObject();
+         try{result.put("query",q==null?"":q);result.put("count",matches);result.put("matches",list);result.put("total",roster.length());}catch(Exception ignored){}
+@@ -276,7 +304,12 @@
+             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,secret(),new GCMParameterSpec(128,nonce));
+             byte[] plain=cipher.doFinal(full,12,full.length-12);
+             JSONObject obj=new JSONObject(new String(plain,StandardCharsets.UTF_8));
+-            roster=obj.getJSONArray("students");selected=context.getSharedPreferences("simplus-roster-ui",0).getInt("selected",obj.optInt("selected",0));
++            roster=obj.getJSONArray("students");
++            for(int i=0;i<roster.length();i++){
++                JSONObject row=roster.optJSONObject(i);
++                if(row!=null&&!row.has("studentKey"))row.put("studentKey",stableKey(row,i));
++            }
++            selected=context.getSharedPreferences("simplus-roster-ui",0).getInt("selected",obj.optInt("selected",0));
+             if(selected>=roster.length()||selected<0)selected=roster.length()>0?0:-1;
+         }catch(Exception ignored){roster=new JSONArray();selected=-1;}
+     }
+--- a/tests/semester-scan.test.js
++++ b/tests/semester-scan.test.js
+@@ -6,7 +6,7 @@
+ const sem=field('semester','Semester',[option('','--Select--'),option('S1','Sem I'),option('S2','Sem II')]);
+ const exam=field('exam','Exam Name',[option('','--Select--')]);
+ const button={value:'Show',offsetWidth:100,getClientRects(){return [{}];},click(){this.clicked=true;}};
+-const document={querySelector(){return null;},querySelectorAll(selector){if(selector==='select')return [sem,exam];if(selector==='table')return [];if(selector.includes('button'))return [button];return [];}};
++const document={getElementById(id){return id==='MCPH1_SCPH_ddldrp'?sem:id==='MCPH1_SCPH_ddlExamName'?exam:id==='MCPH1_SCPH_btnRun'?button:null;},querySelector(){return null;},querySelectorAll(selector){if(selector==='select')return [sem,exam];if(selector==='table')return [];if(selector.includes('button'))return [button];return [];}};
+ const sandbox={document,Event:class{constructor(type){this.type=type;}}};
+ function run(action,args={}){const script=source.replace("'__ACTION__'",JSON.stringify(action)).replace('__ARGS__',JSON.stringify(args));return JSON.parse(vm.runInNewContext(script,sandbox));}
+ const initial=run('semesters');assert.deepEqual(initial.semester.options.map(x=>x.text),['Sem I','Sem II']);assert.equal(initial.exam.options.length,0,'Exam options are initially empty');
+--- a/tests/sim-fingerprint.test.js
++++ b/tests/sim-fingerprint.test.js
+@@ -9,7 +9,7 @@
+ let table;
+ function buildTable(){const rows=[['Subject Name','Marks Obtained'],...subjects.map((s,i)=>[s,String(i*10+50)])].map(values=>({textContent:values.join(' '),querySelectorAll(){return values.map(cell);},closest(){return table;}}));table={offsetWidth:100,getClientRects(){return [{}];},querySelector(sel){return rows[0];},querySelectorAll(){return rows;}};return table;}
+ const btn={value:'Show',offsetWidth:100,getClientRects(){return [{}];},click(){}};
+-const document={querySelector(){return null;},querySelectorAll(q){if(q==='select')return [sem,exam];if(q==='table')retu
