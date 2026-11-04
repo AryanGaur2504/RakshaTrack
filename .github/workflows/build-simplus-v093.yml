@@ -1,0 +1,121 @@
+name: Build SIM+ Campus v0.9.3 Android APK
+on:
+  push:
+    branches: [simplus-v093-extension-capture-build]
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Assemble SIM+ v0.7.3 base
+        run: |
+          base64 -d source.tar.xz.b64 | tar -xJf -
+          cp -a v032_overlay/. .
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for directory,prefix,count in [('v05_json','source_',4),('v06_json','batch_',2)]:
+              for i in range(count):
+                  for name,body in json.loads(Path(f'{directory}/{prefix}{i}.json').read_text()).items():
+                      p=Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(body,encoding='utf-8')
+          PY
+          cp -a v06_overlay/. .
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for i in range(5):
+              for name,body in json.loads(Path(f'v07_json/source_{i}.json').read_text(encoding='utf-8')).items():
+                  p=Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(body,encoding='utf-8')
+          PY
+          cp -a v071_overlay/. .
+          cp v071_roster_update/StudentRosterStore.java app/src/main/java/com/campus/simplus/StudentRosterStore.java
+          python3 v071_patch_fixed.py
+          cp -a v072_overlay/. .
+          patch -p1 --batch < v072_patch.diff
+          for p in v073_final/academic.diff v073_final/photo.diff v073_final/ui.diff; do echo >> "$p"; done
+          patch -p1 --batch < v073_final/academic.diff
+          patch -p1 --batch < v073_final/photo.diff
+          patch -p1 --batch < v073_final/ui.diff
+          cp v073_final/sim_fill.js app/src/main/assets/sim_fill.js
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for name,body in json.loads(Path('v073_final/tests.json').read_text(encoding='utf-8')).items():
+              p=Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(body,encoding='utf-8')
+          PY
+      - name: Apply complete v0.8.0 source patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for n in range(1,6):
+              parts=sorted(Path('v080_parts').glob(f'p{n:02}_*.txt'))
+              assert parts, f'Missing patch {n}'
+              body=b''.join(p.read_bytes() for p in parts)
+              if n==2:
+                  begin=body.index(b'--- a/app/src/main/assets/sim_fill.js\n')
+                  end=body.index(b'--- /dev/null\n',begin)
+                  body=body[:begin]+body[end:]
+              out=Path(f'/tmp/patch_{n:02}.diff')
+              out.write_bytes(body+(b'\n' if not body.endswith(b'\n') else b''))
+              print(out.name, len(body), len(parts))
+          PY
+          patch -p1 --batch < v080_patch/patch_00.diff
+          for i in 01 02 03 04 05; do patch -p1 --batch < /tmp/patch_${i}.diff; done
+          cp v080_special/sim_fill.js app/src/main/assets/sim_fill.js
+      - name: Apply v0.9.0 redesign and onboarding
+        run: |
+          cat v090_chunks/part_*.txt | base64 -d | tar -xJf -
+          grep -F "versionName '0.9.0'" app/build.gradle
+          test -s app/src/main/assets/result_bot.js
+      - name: Apply AKTU One View outage handling
+        run: |
+          python3 v091/v091_native_patch.py
+          python3 v091/v091_ui_patch.py
+          grep -F 'https://oneview.aktu.ac.in/WebPages/aktu/OneView.aspx' app/src/main/java/com/campus/simplus/AcademicFeatures.java
+          grep -F "versionName '0.9.1'" app/build.gradle
+      - name: Apply direct authenticated results fetch
+        run: |
+          mkdir -p /tmp/v092
+          cat v092_transfer/part*.txt | base64 -d | tar -xJf - -C /tmp/v092
+          test -s /tmp/v092/source.diff
+          patch -p1 --batch < /tmp/v092/source.diff
+          cp /tmp/v092/sim_direct_fetch.js app/src/main/assets/sim_direct_fetch.js
+          grep -F "versionName '0.9.2'" app/build.gradle
+          node --check app/src/main/assets/sim_direct_fetch.js
+      - name: Install extension-based AKTU capture, SIM fast path and subject bunker
+        run: |
+          mkdir -p /tmp/v093
+          cat v093_payload/part_*.txt | base64 -d | tar -xJf - -C /tmp/v093
+          test -s /tmp/v093/update.diff
+          patch -p1 --batch < /tmp/v093/update.diff
+          cp /tmp/v093/aktu_extension_capture.js app/src/main/assets/aktu_extension_capture.js
+          grep -F "versionName '0.9.3'" app/build.gradle
+          node --check app/src/main/assets/aktu_extension_capture.js
+      - name: Run JavaScript tests
+        run: |
+          for f in app/src/main/assets/*.js; do node --check "$f"; done
+          for f in tests/*.js; do node "$f"; done
+      - name: Compile Android APK
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIMPlus-Campus-v0.9.3-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
